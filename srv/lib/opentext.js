@@ -33,6 +33,9 @@ const deps = {
 const OTDS_AUTH_PATH = '/otdsws/v1/authentication/credentials';
 const OTCS_NODES_PATH = '/otcs/cs.exe/api/v2/nodes';
 
+// OTCS node subtype for a document (validated CE 25.4, mirrors src/opentext_client.py).
+const NODE_TYPE_DOCUMENT = 144;
+
 // --- destination names (env-overridable for hybrid/test, defaults match the BTP cockpit) ---
 const DEST_OTDS = process.env.OPENTEXT_OTDS_DESTINATION || 'OpenText_OTDS';
 const DEST_OTCS = process.env.OPENTEXT_OTCS_DESTINATION || 'OpenText_OTCS';
@@ -55,16 +58,33 @@ async function authenticate() {
   return ticket;
 }
 
-/** GET an OTCS node, sending OTDSTicket on the request. */
-function fetchNode(ticket, nodeId) {
+/** Issue an OTCS request with the OTDSTicket header. `cfg` is an http-client request config. */
+function otcsRequest(ticket, cfg) {
   return deps.executeHttpRequest(
     { destinationName: DEST_OTCS },
-    {
-      method: 'GET',
-      url: `${OTCS_NODES_PATH}/${nodeId}`,
-      headers: { OTDSTicket: ticket },
-    }
+    { ...cfg, headers: { OTDSTicket: ticket, ...(cfg.headers || {}) } }
   );
+}
+
+/** GET an OTCS node, sending OTDSTicket on the request. */
+function fetchNode(ticket, nodeId) {
+  return otcsRequest(ticket, { method: 'GET', url: `${OTCS_NODES_PATH}/${nodeId}` });
+}
+
+/**
+ * Authenticate, run `fn(ticket)`, and retry exactly once on a 401 with a fresh
+ * ticket (re-auth, no backoff — per project rule). Centralizes the auth dance so
+ * every OTCS operation gets the same OTDSTicket-on-every-call + single-retry behavior.
+ */
+async function withTicket(fn) {
+  let ticket = await authenticate();
+  try {
+    return await fn(ticket);
+  } catch (err) {
+    if (status(err) !== 401) throw err;
+    ticket = await authenticate(); // single retry
+    return fn(ticket);
+  }
 }
 
 /** Pull the node title out of an OTCS v2 node response, defensively. */
@@ -85,25 +105,82 @@ function nodeTitle(data) {
 async function pingNode(nodeId = 2000) {
   const started = process.hrtime.bigint();
   const elapsedMs = () => Number(process.hrtime.bigint() - started) / 1e6;
-
-  let ticket = await authenticate();
-  let res;
-  try {
-    res = await fetchNode(ticket, nodeId);
-  } catch (err) {
-    if (status(err) === 401) {
-      ticket = await authenticate(); // single retry
-      res = await fetchNode(ticket, nodeId);
-    } else {
-      throw err;
-    }
-  }
+  const res = await withTicket((ticket) => fetchNode(ticket, nodeId));
   return {
     ok: res.status >= 200 && res.status < 300,
     status: res.status,
     nodeTitle: nodeTitle(res.data),
     ms: Math.round(elapsedMs()),
   };
+}
+
+/** Flatten an OTCS v2 list payload (`results[i].data.properties`) to an array of property dicts. */
+function flattenChildren(payload) {
+  const results = payload && payload.results;
+  if (Array.isArray(results)) {
+    return results.map((item) => {
+      const data = (item && item.data) || item || {};
+      return (data && data.properties) || data;
+    });
+  }
+  return Array.isArray(payload && payload.data) ? payload.data : []; // v1 fallback
+}
+
+/**
+ * List the document children of a folder, shaped for the portal listing.
+ * Mirrors demo/server.py `_discover_documents`: keep only documents (type 144),
+ * derive (category, subtitle) from the filename.
+ * @returns {Promise<Array<{nodeId:number,name:string,sizeBytes:number,category:string,subtitle:string}>>}
+ */
+async function listFolder(folderId) {
+  const res = await withTicket((ticket) =>
+    otcsRequest(ticket, { method: 'GET', url: `${OTCS_NODES_PATH}/${folderId}/nodes` })
+  );
+  return flattenChildren(res.data)
+    .filter((c) => Number(c && c.type) === NODE_TYPE_DOCUMENT)
+    .map((c) => {
+      const nodeId = Number(c.id);
+      const name = c.name || `node-${nodeId}`;
+      const { category, subtitle } = categorize(name);
+      return { nodeId, name, sizeBytes: Number(c.size || 0), category, subtitle };
+    });
+}
+
+/**
+ * Download a document's bytes from OpenText.
+ * @returns {Promise<{buffer:Buffer,contentType:string}>}
+ */
+async function downloadDocument(nodeId) {
+  const res = await withTicket((ticket) =>
+    otcsRequest(ticket, {
+      method: 'GET',
+      url: `${OTCS_NODES_PATH}/${nodeId}/content`,
+      responseType: 'arraybuffer',
+    })
+  );
+  const contentType =
+    (res.headers &&
+      (res.headers['content-type'] || res.headers['Content-Type'])) ||
+    'application/pdf';
+  return { buffer: Buffer.from(res.data), contentType };
+}
+
+const YEAR_PREFIX = /^\d{4}-\d{2}-/;
+
+/**
+ * Infer (category, subtitle) from a filename — demo heuristic only (mirrors
+ * demo/server.py `_categorize`). In production the category comes from the SAP
+ * domain row that holds the node_id, not from sniffing the name.
+ */
+function categorize(name) {
+  const lower = String(name).toLowerCase();
+  if (lower.startsWith('factura') || lower.startsWith('invoice') || YEAR_PREFIX.test(lower)) {
+    return { category: 'invoice', subtitle: 'documento de cobro' };
+  }
+  if (lower.includes('consumo') || lower.includes('consumption')) {
+    return { category: 'energy', subtitle: 'informe de consumo energético' };
+  }
+  return { category: 'other', subtitle: 'documento' };
 }
 
 /** Extract an HTTP status code from an http-client error shape. */
@@ -113,11 +190,16 @@ function status(err) {
 
 module.exports = {
   pingNode,
+  listFolder,
+  downloadDocument,
+  categorize,
+  NODE_TYPE_DOCUMENT,
   // exported for unit tests
   deps,
   authenticate,
   fetchNode,
   nodeTitle,
+  withTicket,
   DEST_OTDS,
   DEST_OTCS,
   OTDS_AUTH_PATH,

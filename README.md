@@ -92,12 +92,62 @@ npm run watch:hybrid     # cds watch --profile hybrid
 # checkSecret.source should now be 'credstore'; pingOpenText.ok=true with the real node-2000 title
 ```
 
+## Document listing portal (Option A — direct stream)
+
+CAP port of the Python `demo/server.py` portal: list documents live from OpenText and
+open them by clicking. Three pieces:
+
+- **`PortalService.documents()`** (`srv/portal-service.{cds,js}`) — **authenticated**
+  function. Calls `opentext.listFolder(folderId)`, keeps documents (type 144), derives a
+  category from the filename, and mints a short-lived sharing token per node
+  (`srv/lib/token.js`). Returns `[{ nodeId, displayName, category, subtitle, sizeBytes, token }]`.
+  Folder id from `OPENTEXT_FOLDER_ID` (default `2000`); token TTL from `PORTAL_TOKEN_TTL_DAYS`
+  (default 7).
+- **`GET /invoice/:token`** (`srv/server.js`) — **anonymous** route (the token is the
+  credential). Verifies the token, downloads the PDF from OpenText over the Destination
+  Service, and streams the bytes back. *Option A:* serves the PDF directly. A later
+  milestone swaps the handler body for a 302 → CloudFront signed URL without changing the
+  URL contract.
+- **Vue SPA** (`app/portal/src/App.vue` + `cap.js`) — fetches `documents()`, renders the
+  rows grouped (Facturas / Consumo / Otros), each with an **Open PDF** link to
+  `/invoice/{token}`.
+
+`srv/lib/token.js` is a byte-for-byte port of Python `src/token_redirect.py` — verified by
+cross-interop test (a token minted by either side validates on the other). Keep them in
+sync if either changes.
+
+Listing real data requires a live OpenText destination, so run it **hybrid** (`cds bind`)
+or deployed — same as the Python demo needs live OpenText.
+
+## Portal UI (`app/portal`)
+
+A Vite + Vue 3 SPA, scaffolded with `cds add vue --into portal`, served on BTP via the
+**SAP Application Frontend** (`app-front`) service — same delivery pattern as `../bookshop`.
+
+- `app/portal/public/xs-app.json` — routing: `/odata/**` → `srv-api` destination,
+  everything else → `app-front`. (`/rest/**` is open/anonymous, ready for the future
+  customer-facing token route.)
+- `app/portal/public/manifest.json` — Application Frontend app descriptor.
+- `app/portal/vite.config.js` — builds `dist/` and zips it to `dist/portal.zip` (the
+  artifact the MTA's `com.sap.application.content` deployer uploads).
+
+The MTA wires three pieces for this: the `gpcdocdeliveryportal` html5 module (runs
+`npm ci && npm run build`), the `gpc-docdelivery-app-deployer` content module (uploads
+`portal.zip` + registers the `srv-api` destination), and the `gpc-docdelivery-app-front`
+resource. `deploy_mode: html5-repo` is set at the top of `mta.yaml`.
+
+Local UI dev (Vite proxies `/odata` → the CAP server on :4004):
+
+```bash
+npx cds serve &                      # CAP backend on :4004
+npm --prefix app/portal run dev      # SPA on :5173, proxying /odata to :4004
+```
+
 ## Deploy
 
 ```bash
 npm install
-npx cds build --production
-mbt build
+mbt build                            # builds srv + portal SPA + content deployer into one mtar
 cf deploy mta_archives/gpc-document-delivery_0.1.0.mtar
 ```
 
@@ -111,6 +161,8 @@ no secrets in env or code.
   (`b64url_nopad(json_sorted).b64url_nopad(hmac_sha256)`).
 - `srv/lib/cloudfront.js` — port canned-policy signing (RSA PKCS#1 v1.5 + **SHA-1**, AWS
   base64 alphabet `+→-,/→~,=→_`).
-- S3 write-through cache + `GET /invoice/{token}` → 302 redirect endpoint.
-- Approuter + portal (mirror the Python `demo/` harness).
+- CloudFront signing (`srv/lib/cloudfront.js`, RSA PKCS#1 v1.5 + **SHA-1**) + S3 write-through
+  cache, then swap `/invoice/:token` from direct-stream (Option A) to a 302 redirect (Option B).
+  Needs AWS credentials on BTP (Credential Store / destination — TBD).
+- Optional portal extras from the demo: drag-drop upload + backend-trace panel.
 - Retire the FastAPI `proxy/` and the Integration Suite handoff once at parity.

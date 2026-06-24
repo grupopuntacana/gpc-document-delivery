@@ -4,6 +4,7 @@ version: 0.1.0
 description: "GPC Document Delivery (CAP) — Milestone 1: Credential Store + Destination spike"
 parameters:
   enable-parallel-deployments: true
+  deploy_mode: html5-repo
 build-parameters:
   before-all:
     - builder: custom
@@ -39,6 +40,45 @@ modules:
       - name: gpc-docdelivery-credstore
       - name: gpc-docdelivery-logs
 
+  # Deploys the built portal SPA to the Application Frontend service and
+  # registers the srv-api destination the SPA's xs-app.json routes to.
+  - name: gpc-docdelivery-app-deployer
+    type: com.sap.application.content
+    path: gen
+    build-parameters:
+      build-result: app/
+      requires:
+        - name: gpcdocdeliveryportal
+          artifacts:
+            - portal.zip
+          target-path: app/
+    requires:
+      - name: srv-api
+      - name: gpc-docdelivery-app-front
+        parameters:
+          content-target: true
+          config:
+            IASDependencyName: gpc-docdelivery-ias-api
+    parameters:
+      config:
+        destinations:
+          - name: srv-api
+            url: ~{srv-api/srv-url}
+            forwardAuthToken: true
+            IASDependencyName: gpc-docdelivery-ias-api
+
+  # Builds the Vue SPA (app/portal) into dist/ + portal.zip via vite.
+  - name: gpcdocdeliveryportal
+    type: html5
+    path: app/portal
+    build-parameters:
+      build-result: dist
+      builder: custom
+      commands:
+        - npm ci
+        - npm run build
+      supported-platforms: []
+
 resources:
   - name: gpc-docdelivery-auth
     type: org.cloudfoundry.managed-service
@@ -60,6 +100,9 @@ resources:
       service-name: gpc-docdelivery-ias
       service-plan: application
       config:
+        provided-apis:
+          - name: gpc-docdelivery-ias-api
+            description: API exposed by the application
         display-name: gpc-document-delivery
         oauth2-configuration:
           token-policy:
@@ -86,3 +129,9 @@ resources:
     parameters:
       service: application-logs
       service-plan: lite
+  # SAP Application Frontend service — hosts the portal SPA (same pattern as ../bookshop).
+  - name: gpc-docdelivery-app-front
+    type: org.cloudfoundry.managed-service
+    parameters:
+      service: app-front
+      service-plan: developer

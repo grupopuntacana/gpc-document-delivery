@@ -26,10 +26,11 @@
   },
   "cds": {
     "requires": {
+      "app-front": true,
+      "destinations": true,
       "[production]": {
         "auth": "ias"
-      },
-      "destinations": true
+      }
     }
   }
 }

@@ -1,0 +1,13 @@
+{
+  "_version": "1.49.0",
+  "sap.app": {
+    "id": "gpc.documentdelivery.portal",
+    "applicationVersion": {
+      "version": "0.1.0"
+    },
+    "type": "application",
+    "title": "GPC Document Delivery Portal",
+    "description": "Customer-facing portal for OpenText document delivery via CloudFront.",
+    "i18n": "i18n/i18n.properties"
+  }
+}
