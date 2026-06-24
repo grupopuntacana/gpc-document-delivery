@@ -30,7 +30,6 @@ modules:
           srv-url: ${default-url}
           srv-cert-url: '${protocol}://${default-host}.cert.${default-domain}'
     requires:
-      - name: gpc-docdelivery-auth
       - name: gpc-docdelivery-ias
         parameters:
           config:
@@ -80,19 +79,9 @@ modules:
       supported-platforms: []
 
 resources:
-  - name: gpc-docdelivery-auth
-    type: org.cloudfoundry.managed-service
-    parameters:
-      service: xsuaa
-      service-plan: application
-      path: ./xs-security.json
-      config:
-        xsappname: gpc-document-delivery-${org}-${space}
-        tenant-mode: dedicated
-        oauth2-configuration:
-          credential-types:
-            - "binding-secret"
-            - "x509"
+  # IAS-only auth, matching ../bookshop. The app uses `authenticated-user`
+  # (no scopes/roles), so XSUAA is not needed; add it (or AMS) only when
+  # role/scope-based authorization is introduced.
   - name: gpc-docdelivery-ias
     type: org.cloudfoundry.managed-service
     parameters:
