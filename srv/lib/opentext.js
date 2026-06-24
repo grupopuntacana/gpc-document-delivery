@@ -22,11 +22,29 @@
  * destination names (i.e. base URLs + credentials) come from the environment.
  */
 
+const http = require('http');
+const https = require('https');
+
 // Routed through an overridable `deps` object so unit tests can patch the
 // transport without mocking SAP Cloud SDK internals (see test/selftest.test.js).
 const deps = {
   executeHttpRequest: require('@sap-cloud-sdk/http-client').executeHttpRequest,
   getDestination: require('@sap-cloud-sdk/connectivity').getDestination,
+};
+
+// The SAP Connectivity Service proxy (Cloud Connector tunnel) PINS each
+// keep-alive socket to the first on-premise host it serves. Our flow hits two
+// different virtual hosts in sequence — OTDS (otds-dev) to authenticate, then
+// OTCS (otcs-dev) — and the SAP Cloud SDK's default agent pools/reuses the
+// socket, so the second host is sent over a socket pinned to the first. The
+// proxy then rejects it with HTTP 403 "Access denied to resource ... on system
+// otcs-dev" (which masquerades as a Cloud Connector access-control error).
+// Forcing fresh, non-pooled connections gives each call its own socket, so no
+// socket is ever reused across hosts. Validated in-container against the live
+// tunnel: with keep-alive the OTCS call 403s, without it returns 200.
+const noKeepAlive = {
+  httpAgent: new http.Agent({ keepAlive: false }),
+  httpsAgent: new https.Agent({ keepAlive: false }),
 };
 
 // --- endpoint paths (relative to each destination's base URL) ---
@@ -51,6 +69,7 @@ async function authenticate() {
       url: OTDS_AUTH_PATH,
       headers: { 'Content-Type': 'application/json' },
       data: { user_name: dest.username, password: dest.password },
+      ...noKeepAlive,
     }
   );
   const ticket = res.data && res.data.ticket;
@@ -62,7 +81,7 @@ async function authenticate() {
 function otcsRequest(ticket, cfg) {
   return deps.executeHttpRequest(
     { destinationName: DEST_OTCS },
-    { ...cfg, headers: { OTDSTicket: ticket, ...(cfg.headers || {}) } }
+    { ...cfg, headers: { OTDSTicket: ticket, ...(cfg.headers || {}) }, ...noKeepAlive }
   );
 }
 
