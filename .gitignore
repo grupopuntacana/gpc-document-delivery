@@ -1,0 +1,11 @@
+node_modules/
+gen/
+*.mtar
+mta_archives/
+.env
+default-env.json
+*-credentials.json
+.cds_gen_*
+dist/
+.DS_Store
+*.log

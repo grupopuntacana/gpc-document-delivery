@@ -1,0 +1,8 @@
+{
+  "requires": {
+    "destinations": true,
+    "[hybrid]": {
+      "auth": "ias"
+    }
+  }
+}

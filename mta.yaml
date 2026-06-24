@@ -1,0 +1,88 @@
+_schema-version: 3.3.0
+ID: gpc-document-delivery
+version: 0.1.0
+description: "GPC Document Delivery (CAP) — Milestone 1: Credential Store + Destination spike"
+parameters:
+  enable-parallel-deployments: true
+build-parameters:
+  before-all:
+    - builder: custom
+      commands:
+        - npm ci
+        - npx cds build --production
+
+modules:
+  - name: gpc-docdelivery-srv
+    type: nodejs
+    path: gen/srv
+    parameters:
+      instances: 1
+      buildpack: nodejs_buildpack
+      routes:
+        - route: "${default-url}"
+        - route: "${default-host}.cert.${default-domain}"
+    build-parameters:
+      builder: npm-ci
+    provides:
+      - name: srv-api
+        properties:
+          srv-url: ${default-url}
+          srv-cert-url: '${protocol}://${default-host}.cert.${default-domain}'
+    requires:
+      - name: gpc-docdelivery-auth
+      - name: gpc-docdelivery-ias
+        parameters:
+          config:
+            credential-type: X509_GENERATED
+            app-identifier: srv
+      - name: gpc-docdelivery-destination
+      - name: gpc-docdelivery-credstore
+      - name: gpc-docdelivery-logs
+
+resources:
+  - name: gpc-docdelivery-auth
+    type: org.cloudfoundry.managed-service
+    parameters:
+      service: xsuaa
+      service-plan: application
+      path: ./xs-security.json
+      config:
+        xsappname: gpc-document-delivery-${org}-${space}
+        tenant-mode: dedicated
+        oauth2-configuration:
+          credential-types:
+            - "binding-secret"
+            - "x509"
+  - name: gpc-docdelivery-ias
+    type: org.cloudfoundry.managed-service
+    parameters:
+      service: identity
+      service-name: gpc-docdelivery-ias
+      service-plan: application
+      config:
+        display-name: gpc-document-delivery
+        oauth2-configuration:
+          token-policy:
+            access-token-format: "jwt"
+        xsuaa-cross-consumption: true
+  # Destination Service: holds the OpenText connectivity entries
+  # (OpenText_OTDS -> https://otion.grupopuntacana.com:8443, OpenText_OTCS -> https://otion.grupopuntacana.com).
+  # Entries are created in the BTP cockpit / via cf CLI after deploy — see README.
+  - name: gpc-docdelivery-destination
+    type: org.cloudfoundry.managed-service
+    parameters:
+      service: destination
+      service-plan: lite
+  # Credential Store: holds SHARED_LINK_SECRET (password) + CloudFrontPrivateKey (key).
+  # Namespace + entries are provisioned after binding — see README.
+  # NOTE: confirm the available plan on this tenant ("free" on trial; "standard" otherwise).
+  - name: gpc-docdelivery-credstore
+    type: org.cloudfoundry.managed-service
+    parameters:
+      service: credstore
+      service-plan: free
+  - name: gpc-docdelivery-logs
+    type: org.cloudfoundry.managed-service
+    parameters:
+      service: application-logs
+      service-plan: lite

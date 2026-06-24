@@ -1,0 +1,35 @@
+{
+  "name": "gpc-document-delivery",
+  "version": "0.1.0",
+  "description": "GPC Document Delivery — CAP app on BTP. Verifies HMAC sharing tokens and serves OpenText PDFs via CloudFront. Milestone 1: Credential Store + Destination Service spike.",
+  "private": true,
+  "dependencies": {
+    "@sap/cds": "^9",
+    "@sap/xssec": "^4",
+    "@sap/xsenv": "^5",
+    "@sap-cloud-sdk/connectivity": "^4",
+    "@sap-cloud-sdk/http-client": "^4",
+    "jose": "^5"
+  },
+  "devDependencies": {
+    "@cap-js/cds-test": "^1.0.1",
+    "@cap-js/sqlite": "^2.4",
+    "@sap/cds-dk": "^9",
+    "vitest": "^4.1.9"
+  },
+  "scripts": {
+    "start": "cds-serve",
+    "watch": "cds watch",
+    "watch:hybrid": "cds watch --profile hybrid",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "cds": {
+    "requires": {
+      "[production]": {
+        "auth": "ias"
+      },
+      "destinations": true
+    }
+  }
+}

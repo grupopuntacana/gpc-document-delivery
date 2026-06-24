@@ -1,0 +1,9 @@
+{
+  "xsappname": "gpc-document-delivery",
+  "tenant-mode": "dedicated",
+  "scopes": [],
+  "role-templates": [],
+  "oauth2-configuration": {
+    "credential-types": ["binding-secret", "x509"]
+  }
+}
