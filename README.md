@@ -52,10 +52,31 @@ The `SHARED_LINK_SECRET` value **must be byte-identical** to the Python side
 (`../python/opentext-cdn-prototype/.env`, 64 chars) or every existing sharing token
 breaks — see the cross-side interop contract in that repo's `CLAUDE.md`.
 
+## Secrets during validation (Credential Store deferred)
+
+The Credential Store is a **paid** service, so it's commented out in `mta.yaml` while we
+validate. The code needs no change: `credstore.js` falls back to env when no credstore is
+bound (and for Option A only `SHARED_LINK_SECRET` is needed — the CloudFront key isn't used
+until Option B). Supply the secret via a gitignored MTA extension descriptor:
+
+```bash
+cp secrets.mtaext.example secrets.mtaext       # fill in the 64-char secret
+mbt build
+cf deploy mta_archives/gpc-document-delivery_0.1.0.mtar -e secrets.mtaext
+```
+
+Quick alternative (no extension file): `cf set-env gpc-docdelivery-srv SHARED_LINK_SECRET '<secret>' && cf restage gpc-docdelivery-srv`.
+Locally/hybrid: just `export SHARED_LINK_SECRET=<secret>`.
+
+**To switch to Credential Store later:** uncomment the `gpc-docdelivery-credstore` resource
++ the srv `requires` line in `mta.yaml`, create the entries (below), redeploy, and delete
+`secrets.mtaext`. `credstore.js` auto-detects the binding — no code change.
+
 ## BTP setup (one-time, after first deploy)
 
-The MTA (`mta.yaml`) provisions the service instances (xsuaa, ias, **destination**,
-**credstore**, application-logs). Their *contents* are configured in the cockpit / CF CLI:
+The MTA (`mta.yaml`) provisions the service instances (ias, **destination**,
+application-logs; **credstore** when re-enabled). Their *contents* are configured in the
+cockpit / CF CLI:
 
 ### Destinations
 Create two destinations (OTDS is on port 8443, OTCS on 443):

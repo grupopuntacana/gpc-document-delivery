@@ -5,6 +5,8 @@ mta_archives/
 .env
 default-env.json
 *-credentials.json
+secrets.mtaext
+.cdsrc-private.json
 .cds_gen_*
 dist/
 .DS_Store
