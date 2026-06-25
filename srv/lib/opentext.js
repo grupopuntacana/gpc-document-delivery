@@ -56,6 +56,17 @@ const OTCS_NODES_PATH = '/otcs/cs.exe/api/v2/nodes';
 // OTCS node subtype for a document (validated CE 25.4, mirrors src/opentext_client.py).
 const NODE_TYPE_DOCUMENT = 144;
 
+// The folder-list call dominates a listing (~1.9s, measured). By default OTCS v2
+// returns every property plus per-node `actions`/permission expansions, which the
+// server has to compute and serialize for each child. We consume only id/name/type/
+// size, so we ask for just those via the `fields` query param to cut server-side work
+// and payload. Env-overridable as an escape hatch: set OTCS_LIST_FIELDS='' to revert
+// to the full (unfiltered) response without a code change if a tenant rejects the param.
+const LIST_FIELDS =
+  process.env.OTCS_LIST_FIELDS != null
+    ? process.env.OTCS_LIST_FIELDS
+    : 'properties{id,name,type,size}';
+
 // --- destination names (env-overridable for hybrid/test, defaults match the BTP cockpit) ---
 const DEST_OTDS = process.env.OPENTEXT_OTDS_DESTINATION || 'OpenText_OTDS';
 const DEST_OTCS = process.env.OPENTEXT_OTCS_DESTINATION || 'OpenText_OTCS';
@@ -197,9 +208,9 @@ function flattenChildren(payload) {
  * @returns {Promise<Array<{nodeId:number,name:string,sizeBytes:number,category:string,subtitle:string}>>}
  */
 async function listFolder(folderId) {
-  const res = await withTicket((ticket) =>
-    otcsRequest(ticket, { method: 'GET', url: `${OTCS_NODES_PATH}/${folderId}/nodes` })
-  );
+  let url = `${OTCS_NODES_PATH}/${folderId}/nodes`;
+  if (LIST_FIELDS) url += `?fields=${encodeURIComponent(LIST_FIELDS)}`;
+  const res = await withTicket((ticket) => otcsRequest(ticket, { method: 'GET', url }));
   return flattenChildren(res.data)
     .filter((c) => Number(c && c.type) === NODE_TYPE_DOCUMENT)
     .map((c) => {

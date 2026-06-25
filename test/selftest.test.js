@@ -119,4 +119,30 @@ describe('opentext.pingNode', () => {
     expect(b.ok).toBe(true);
     expect(ticketsIssued).toBe(1); // second listing reused the cached ticket
   });
+
+  it('listFolder requests only the needed fields and keeps only documents', async () => {
+    opentext.deps.executeHttpRequest.mockImplementation(async (_dest, cfg) => {
+      if (cfg.method === 'POST') return { status: 200, data: { ticket: 'T' } };
+      return {
+        status: 200,
+        data: {
+          results: [
+            { data: { properties: { id: 1, name: 'factura-01.pdf', type: 144, size: 2048 } } },
+            { data: { properties: { id: 2, name: 'a-subfolder', type: 0, size: 0 } } }, // not a doc
+          ],
+        },
+      };
+    });
+
+    const docs = await opentext.listFolder(52480);
+
+    // server-side field trim is requested on the OTCS list call
+    const getCall = opentext.deps.executeHttpRequest.mock.calls.find(([, c]) => c.method === 'GET');
+    expect(getCall[1].url).toContain('/nodes/52480/nodes?fields=');
+    expect(decodeURIComponent(getCall[1].url)).toContain('properties{id,name,type,size}');
+
+    // only the type-144 document survives, shaped for the portal
+    expect(docs).toHaveLength(1);
+    expect(docs[0]).toMatchObject({ nodeId: 1, name: 'factura-01.pdf', sizeBytes: 2048, category: 'invoice' });
+  });
 });
