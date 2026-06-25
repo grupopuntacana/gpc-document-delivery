@@ -37,9 +37,11 @@ module.exports = class PortalService extends cds.ApplicationService {
         );
         const t2 = process.hrtime.bigint();
         const ms = (a, b) => Math.round(Number(b - a) / 1e6);
-        LOG.info(
-          `documents: ${rows.length} from folder ${FOLDER_ID} ` +
-            `(listMs=${ms(t0, t1)} tokenMs=${ms(t1, t2)} totalMs=${ms(t0, t2)})`
+        LOG.info(`documents: ${rows.length} from folder ${FOLDER_ID}`);
+        // Per-phase timing at debug — raise the `portal` logger to debug to see it
+        // (see README "Debugging with logs"). listMs=OpenText, tokenMs=secret+HMAC.
+        LOG.debug(
+          `documents timing: listMs=${ms(t0, t1)} tokenMs=${ms(t1, t2)} totalMs=${ms(t0, t2)}`
         );
         return rows;
       } catch (err) {

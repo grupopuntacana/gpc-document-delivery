@@ -177,6 +177,55 @@ cf deploy mta_archives/gpc-document-delivery_0.1.0.mtar
 secret comes from Credential Store and OpenText is reached through the Destination, with
 no secrets in env or code.
 
+## Debugging with logs
+
+The service emits `info`-level operational lines always, and `debug`-level **per-phase
+timing** that's off by default. The timing was used to drive the listing-performance work
+(secret cache → ticket cache → OTCS field selection, ~2.5s → ~1.1s warm) and stays in the
+code for future diagnosis.
+
+### Loggers and what they print
+
+| Logger | Level | Line | Meaning |
+|---|---|---|---|
+| `portal` | info | `documents: N from folder F` | a listing returned N docs |
+| `portal` | debug | `documents timing: listMs=… tokenMs=… totalMs=…` | `listMs`=OpenText round trips, `tokenMs`=secret fetch + HMAC (≈0 once the secret cache is warm) |
+| `opentext` | debug | `withTicket: authMs=… callMs=…` | `authMs`=OTDS auth (≈0 when the ticket cache is warm), `callMs`=the OTCS call itself |
+
+Reading the timing: a warm request should show `authMs=0 tokenMs=0`; whatever remains is
+`callMs` (OpenText server-side + tunnel latency). If `authMs` or `tokenMs` is non-zero on a
+*repeat* request, the corresponding cache isn't taking effect.
+
+### Turn debug timing on (no redeploy)
+
+CAP log levels are set per-logger via the `CDS_LOG_LEVELS` env var (JSON map). Raise just the
+two loggers, restage, then read the logs:
+
+```bash
+cf set-env gpc-docdelivery-srv CDS_LOG_LEVELS '{"portal":"debug","opentext":"debug"}'
+cf restage gpc-docdelivery-srv
+
+# load the portal a couple of times, then pull the timing lines:
+cf logs gpc-docdelivery-srv --recent | grep -E "withTicket|documents"
+```
+
+Turn it back off when done:
+
+```bash
+cf unset-env gpc-docdelivery-srv CDS_LOG_LEVELS && cf restage gpc-docdelivery-srv
+```
+
+Locally, the same applies to `cds watch`: `CDS_LOG_LEVELS='{"portal":"debug","opentext":"debug"}' cds watch`.
+
+### Related env toggles (for diagnosis)
+
+- `CREDSTORE_SECRET_TTL_MS` — secret-cache TTL (default 600000; `0` disables caching).
+- `OTDS_TICKET_TTL_MS` — OTDS ticket-cache TTL (default 600000; `0` disables).
+- `OTCS_LIST_FIELDS` — fields requested from the OTCS folder list (default
+  `properties{id,name,type,size}`; set `''` to fetch the full, unfiltered response).
+- `OPENTEXT_KEEP_ALIVE` — `true` enables per-host keep-alive agents (default off; measured
+  to give no win — the bottleneck is OpenText-side, not the TLS handshake).
+
 ## Roadmap (later milestones)
 - `srv/lib/token.js` — port HMAC verify/parse from Python `token_redirect.py`
   (`b64url_nopad(json_sorted).b64url_nopad(hmac_sha256)`).

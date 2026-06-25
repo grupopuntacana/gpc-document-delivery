@@ -163,9 +163,9 @@ async function withTicket(fn) {
   const ms = (a, b) => Math.round(Number(b - a) / 1e6);
   try {
     const out = await fn(ticket);
-    // info (not debug) so it's visible in cf logs without raising the log level
-    // while we measure; lower to debug once the perf work is settled.
-    LOG.info(`withTicket: authMs=${ms(t0, t1)} callMs=${ms(t1, process.hrtime.bigint())}`);
+    // Per-phase timing at debug — raise the `opentext` logger to debug to see it
+    // (see README "Debugging with logs"). authMs=0 means the OTDS ticket was cached.
+    LOG.debug(`withTicket: authMs=${ms(t0, t1)} callMs=${ms(t1, process.hrtime.bigint())}`);
     return out;
   } catch (err) {
     if (status(err) !== 401) throw err;
