@@ -25,6 +25,8 @@
 const http = require('http');
 const https = require('https');
 
+const LOG = require('@sap/cds').log('opentext');
+
 // Routed through an overridable `deps` object so unit tests can patch the
 // transport without mocking SAP Cloud SDK internals (see test/selftest.test.js).
 const deps = {
@@ -34,18 +36,31 @@ const deps = {
 
 // The SAP Connectivity Service proxy (Cloud Connector tunnel) PINS each
 // keep-alive socket to the first on-premise host it serves. Our flow hits two
-// different virtual hosts in sequence — OTDS (otds-dev) to authenticate, then
-// OTCS (otcs-dev) — and the SAP Cloud SDK's default agent pools/reuses the
-// socket, so the second host is sent over a socket pinned to the first. The
-// proxy then rejects it with HTTP 403 "Access denied to resource ... on system
-// otcs-dev" (which masquerades as a Cloud Connector access-control error).
-// Forcing fresh, non-pooled connections gives each call its own socket, so no
-// socket is ever reused across hosts. Validated in-container against the live
-// tunnel: with keep-alive the OTCS call 403s, without it returns 200.
-const noKeepAlive = {
-  httpAgent: new http.Agent({ keepAlive: false }),
-  httpsAgent: new https.Agent({ keepAlive: false }),
-};
+// different virtual hosts — OTDS (otds-dev) to authenticate, then OTCS (otcs-dev)
+// — and the SAP Cloud SDK's default agent pools sockets ACROSS hosts, so a socket
+// pinned to the first host gets reused for the second. The proxy then rejects it
+// with HTTP 403 "Access denied to resource ... on system otcs-dev". The original
+// fix disabled keep-alive entirely (a fresh socket per call), but that makes every
+// call pay a full TLS handshake through the tunnel (~part of the measured callMs).
+//
+// Refinement: give each host its OWN agent pair. A socket in the OTCS pool was only
+// ever connected to OTCS, so reusing it for the next OTCS call honors the proxy's
+// pinning instead of violating it — keep-alive WITHIN a host, never across. This is
+// the hypothesis under test, so it's behind an env toggle defaulting to the proven-
+// safe behavior (keep-alive OFF). Set OPENTEXT_KEEP_ALIVE=true to enable; if the 403
+// returns, flip it back and restage — no redeploy.
+const KEEP_ALIVE = process.env.OPENTEXT_KEEP_ALIVE === 'true';
+
+function makeAgents() {
+  return {
+    httpAgent: new http.Agent({ keepAlive: KEEP_ALIVE }),
+    httpsAgent: new https.Agent({ keepAlive: KEEP_ALIVE }),
+  };
+}
+
+// Dedicated per-host agents so a pooled socket is never shared across OTDS/OTCS.
+const otdsAgents = makeAgents();
+const otcsAgents = makeAgents();
 
 // --- endpoint paths (relative to each destination's base URL) ---
 const OTDS_AUTH_PATH = '/otdsws/v1/authentication/credentials';
@@ -53,6 +68,17 @@ const OTCS_NODES_PATH = '/otcs/cs.exe/api/v2/nodes';
 
 // OTCS node subtype for a document (validated CE 25.4, mirrors src/opentext_client.py).
 const NODE_TYPE_DOCUMENT = 144;
+
+// The folder-list call dominates a listing (~1.9s, measured). By default OTCS v2
+// returns every property plus per-node `actions`/permission expansions, which the
+// server has to compute and serialize for each child. We consume only id/name/type/
+// size, so we ask for just those via the `fields` query param to cut server-side work
+// and payload. Env-overridable as an escape hatch: set OTCS_LIST_FIELDS='' to revert
+// to the full (unfiltered) response without a code change if a tenant rejects the param.
+const LIST_FIELDS =
+  process.env.OTCS_LIST_FIELDS != null
+    ? process.env.OTCS_LIST_FIELDS
+    : 'properties{id,name,type,size}';
 
 // --- destination names (env-overridable for hybrid/test, defaults match the BTP cockpit) ---
 const DEST_OTDS = process.env.OPENTEXT_OTDS_DESTINATION || 'OpenText_OTDS';
@@ -69,7 +95,7 @@ async function authenticate() {
       url: OTDS_AUTH_PATH,
       headers: { 'Content-Type': 'application/json' },
       data: { user_name: dest.username, password: dest.password },
-      ...noKeepAlive,
+      ...otdsAgents,
     }
   );
   const ticket = res.data && res.data.ticket;
@@ -77,11 +103,43 @@ async function authenticate() {
   return ticket;
 }
 
+// In-memory single-flight cache for the OTDS ticket. The ticket is reusable across
+// requests, so re-authenticating on every listing wastes a full OTDS round trip
+// (~600ms, measured). We cache the in-flight *promise* so a concurrent burst shares
+// one auth, and use a conservative TTL — staleness is self-correcting because
+// `withTicket` re-auths once on a 401 (forceRefresh) and the OTDS ticket lifetime is
+// far longer than this. Set OTDS_TICKET_TTL_MS=0 to disable (tests).
+const TICKET_TTL_MS = Number(
+  process.env.OTDS_TICKET_TTL_MS != null ? process.env.OTDS_TICKET_TTL_MS : 10 * 60 * 1000
+);
+let _ticketPromise = null;
+let _ticketExpires = 0;
+
+/** Cached OTDS ticket; `forceRefresh` re-authenticates and replaces the cache (post-401). */
+function getTicket(forceRefresh = false) {
+  const now = Date.now();
+  if (!forceRefresh && _ticketPromise && now < _ticketExpires) return _ticketPromise;
+  _ticketExpires = now + TICKET_TTL_MS;
+  _ticketPromise = authenticate();
+  // Drop a cached rejection so the next call retries instead of serving a stuck error.
+  _ticketPromise.catch(() => {
+    _ticketPromise = null;
+    _ticketExpires = 0;
+  });
+  return _ticketPromise;
+}
+
+/** Clear the cached ticket (tests / forced refresh). */
+function clearTicketCache() {
+  _ticketPromise = null;
+  _ticketExpires = 0;
+}
+
 /** Issue an OTCS request with the OTDSTicket header. `cfg` is an http-client request config. */
 function otcsRequest(ticket, cfg) {
   return deps.executeHttpRequest(
     { destinationName: DEST_OTCS },
-    { ...cfg, headers: { OTDSTicket: ticket, ...(cfg.headers || {}) }, ...noKeepAlive }
+    { ...cfg, headers: { OTDSTicket: ticket, ...(cfg.headers || {}) }, ...otcsAgents }
   );
 }
 
@@ -96,12 +154,23 @@ function fetchNode(ticket, nodeId) {
  * every OTCS operation gets the same OTDSTicket-on-every-call + single-retry behavior.
  */
 async function withTicket(fn) {
-  let ticket = await authenticate();
+  // Timing split so logs separate the OTDS auth round trip (candidate for ticket
+  // caching) from the actual OTCS operation. Both currently pay a fresh TLS
+  // handshake because keep-alive is disabled (see noKeepAlive note above).
+  const t0 = process.hrtime.bigint();
+  let ticket = await getTicket(); // cached — authMs ~0 on a cache hit
+  const t1 = process.hrtime.bigint();
+  const ms = (a, b) => Math.round(Number(b - a) / 1e6);
   try {
-    return await fn(ticket);
+    const out = await fn(ticket);
+    // Per-phase timing at debug — raise the `opentext` logger to debug to see it
+    // (see README "Debugging with logs"). authMs=0 means the OTDS ticket was cached.
+    LOG.debug(`withTicket: authMs=${ms(t0, t1)} callMs=${ms(t1, process.hrtime.bigint())}`);
+    return out;
   } catch (err) {
     if (status(err) !== 401) throw err;
-    ticket = await authenticate(); // single retry
+    ticket = await getTicket(true); // stale ticket — force re-auth and retry once
+    LOG.debug(`withTicket: re-auth after 401 (authMs=${ms(t0, t1)})`);
     return fn(ticket);
   }
 }
@@ -152,9 +221,9 @@ function flattenChildren(payload) {
  * @returns {Promise<Array<{nodeId:number,name:string,sizeBytes:number,category:string,subtitle:string}>>}
  */
 async function listFolder(folderId) {
-  const res = await withTicket((ticket) =>
-    otcsRequest(ticket, { method: 'GET', url: `${OTCS_NODES_PATH}/${folderId}/nodes` })
-  );
+  let url = `${OTCS_NODES_PATH}/${folderId}/nodes`;
+  if (LIST_FIELDS) url += `?fields=${encodeURIComponent(LIST_FIELDS)}`;
+  const res = await withTicket((ticket) => otcsRequest(ticket, { method: 'GET', url }));
   return flattenChildren(res.data)
     .filter((c) => Number(c && c.type) === NODE_TYPE_DOCUMENT)
     .map((c) => {
@@ -216,6 +285,8 @@ module.exports = {
   // exported for unit tests
   deps,
   authenticate,
+  getTicket,
+  clearTicketCache,
   fetchNode,
   nodeTitle,
   withTicket,

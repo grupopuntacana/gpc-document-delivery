@@ -18,7 +18,13 @@ module.exports = class PortalService extends cds.ApplicationService {
   init() {
     this.on('documents', async (req) => {
       try {
+        // Per-phase timing so the logs reveal where a listing spends its time:
+        //   listMs  = OpenText round trips (OTDS auth + OTCS folder list)
+        //   tokenMs = token minting (secret fetch + HMAC) — should be ~0 once the
+        //             secret cache is warm; if it isn't, the cache isn't taking effect.
+        const t0 = process.hrtime.bigint();
         const docs = await opentext.listFolder(FOLDER_ID);
+        const t1 = process.hrtime.bigint();
         const rows = await Promise.all(
           docs.map(async (d) => ({
             nodeId: d.nodeId,
@@ -29,7 +35,14 @@ module.exports = class PortalService extends cds.ApplicationService {
             token: await token.makeToken(d.nodeId, { ttlDays: TOKEN_TTL_DAYS }),
           }))
         );
+        const t2 = process.hrtime.bigint();
+        const ms = (a, b) => Math.round(Number(b - a) / 1e6);
         LOG.info(`documents: ${rows.length} from folder ${FOLDER_ID}`);
+        // Per-phase timing at debug — raise the `portal` logger to debug to see it
+        // (see README "Debugging with logs"). listMs=OpenText, tokenMs=secret+HMAC.
+        LOG.debug(
+          `documents timing: listMs=${ms(t0, t1)} tokenMs=${ms(t1, t2)} totalMs=${ms(t0, t2)}`
+        );
         return rows;
       } catch (err) {
         LOG.error('documents listing failed:', err.message);
