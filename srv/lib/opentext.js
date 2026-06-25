@@ -36,18 +36,31 @@ const deps = {
 
 // The SAP Connectivity Service proxy (Cloud Connector tunnel) PINS each
 // keep-alive socket to the first on-premise host it serves. Our flow hits two
-// different virtual hosts in sequence — OTDS (otds-dev) to authenticate, then
-// OTCS (otcs-dev) — and the SAP Cloud SDK's default agent pools/reuses the
-// socket, so the second host is sent over a socket pinned to the first. The
-// proxy then rejects it with HTTP 403 "Access denied to resource ... on system
-// otcs-dev" (which masquerades as a Cloud Connector access-control error).
-// Forcing fresh, non-pooled connections gives each call its own socket, so no
-// socket is ever reused across hosts. Validated in-container against the live
-// tunnel: with keep-alive the OTCS call 403s, without it returns 200.
-const noKeepAlive = {
-  httpAgent: new http.Agent({ keepAlive: false }),
-  httpsAgent: new https.Agent({ keepAlive: false }),
-};
+// different virtual hosts — OTDS (otds-dev) to authenticate, then OTCS (otcs-dev)
+// — and the SAP Cloud SDK's default agent pools sockets ACROSS hosts, so a socket
+// pinned to the first host gets reused for the second. The proxy then rejects it
+// with HTTP 403 "Access denied to resource ... on system otcs-dev". The original
+// fix disabled keep-alive entirely (a fresh socket per call), but that makes every
+// call pay a full TLS handshake through the tunnel (~part of the measured callMs).
+//
+// Refinement: give each host its OWN agent pair. A socket in the OTCS pool was only
+// ever connected to OTCS, so reusing it for the next OTCS call honors the proxy's
+// pinning instead of violating it — keep-alive WITHIN a host, never across. This is
+// the hypothesis under test, so it's behind an env toggle defaulting to the proven-
+// safe behavior (keep-alive OFF). Set OPENTEXT_KEEP_ALIVE=true to enable; if the 403
+// returns, flip it back and restage — no redeploy.
+const KEEP_ALIVE = process.env.OPENTEXT_KEEP_ALIVE === 'true';
+
+function makeAgents() {
+  return {
+    httpAgent: new http.Agent({ keepAlive: KEEP_ALIVE }),
+    httpsAgent: new https.Agent({ keepAlive: KEEP_ALIVE }),
+  };
+}
+
+// Dedicated per-host agents so a pooled socket is never shared across OTDS/OTCS.
+const otdsAgents = makeAgents();
+const otcsAgents = makeAgents();
 
 // --- endpoint paths (relative to each destination's base URL) ---
 const OTDS_AUTH_PATH = '/otdsws/v1/authentication/credentials';
@@ -82,7 +95,7 @@ async function authenticate() {
       url: OTDS_AUTH_PATH,
       headers: { 'Content-Type': 'application/json' },
       data: { user_name: dest.username, password: dest.password },
-      ...noKeepAlive,
+      ...otdsAgents,
     }
   );
   const ticket = res.data && res.data.ticket;
@@ -126,7 +139,7 @@ function clearTicketCache() {
 function otcsRequest(ticket, cfg) {
   return deps.executeHttpRequest(
     { destinationName: DEST_OTCS },
-    { ...cfg, headers: { OTDSTicket: ticket, ...(cfg.headers || {}) }, ...noKeepAlive }
+    { ...cfg, headers: { OTDSTicket: ticket, ...(cfg.headers || {}) }, ...otcsAgents }
   );
 }
 
