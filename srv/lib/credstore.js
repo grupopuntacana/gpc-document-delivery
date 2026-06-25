@@ -206,6 +206,62 @@ async function getCloudFrontPrivateKey() {
   );
 }
 
+// In-memory single-flight cache for the AWS S3 credentials. Like the HMAC secret these
+// are process-stable, so a per-instance memo avoids a Credential Store round trip on
+// every cache miss. Cache the in-flight *promise* so a concurrent burst collapses to one
+// pair of fetches. Short TTL picks up a rotation without a restart;
+// set CREDSTORE_AWS_TTL_MS=0 to disable (tests).
+const AWS_TTL_MS = Number(
+  process.env.CREDSTORE_AWS_TTL_MS != null ? process.env.CREDSTORE_AWS_TTL_MS : 10 * 60 * 1000
+);
+let _awsPromise = null;
+let _awsExpires = 0;
+
+/** Uncached read of the AWS S3 credentials (credstore binding, else env fallback). */
+async function readAwsCredentials() {
+  const creds = binding();
+  if (creds) {
+    const [id, secret] = await Promise.all([
+      fetchEntry(creds, 'password', 'AWS_ACCESS_KEY_ID'),
+      fetchEntry(creds, 'password', 'AWS_SECRET_ACCESS_KEY'),
+    ]);
+    return { accessKeyId: id.value, secretAccessKey: secret.value };
+  }
+  const accessKeyId = process.env.AWS_ACCESS_KEY_ID;
+  const secretAccessKey = process.env.AWS_SECRET_ACCESS_KEY;
+  if (!accessKeyId || !secretAccessKey) {
+    throw new Error(
+      'AWS credentials unavailable: no credstore binding and AWS_ACCESS_KEY_ID/' +
+        'AWS_SECRET_ACCESS_KEY unset. Bind the Credential Store, or set them for local/hybrid runs.'
+    );
+  }
+  return { accessKeyId, secretAccessKey };
+}
+
+/**
+ * The AWS access key/secret for the S3 write-through cache. Cached in-memory
+ * (single-flight, TTL `CREDSTORE_AWS_TTL_MS`) so repeated cache misses don't re-hit
+ * the store. Only Layer 2 (`cdn.js`) needs these — signing (Layer 1) does not.
+ * @returns {Promise<{accessKeyId:string,secretAccessKey:string}>}
+ */
+async function getAwsCredentials() {
+  const now = Date.now();
+  if (_awsPromise && now < _awsExpires) return _awsPromise;
+  _awsExpires = now + AWS_TTL_MS;
+  _awsPromise = readAwsCredentials();
+  _awsPromise.catch(() => {
+    _awsPromise = null;
+    _awsExpires = 0;
+  });
+  return _awsPromise;
+}
+
+/** Clear the cached AWS credentials (tests / forced refresh after a known rotation). */
+function clearAwsCache() {
+  _awsPromise = null;
+  _awsExpires = 0;
+}
+
 /** Diagnostic: are we reading from a live Credential Store binding (true) or env fallback (false)? */
 function isBound() {
   return binding() !== null;
@@ -214,7 +270,9 @@ function isBound() {
 module.exports = {
   getSharedLinkSecret,
   getCloudFrontPrivateKey,
+  getAwsCredentials,
   isBound,
   clearSecretCache,
+  clearAwsCache,
   NAMESPACE,
 };

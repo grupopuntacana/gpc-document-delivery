@@ -253,6 +253,17 @@ async function downloadDocument(nodeId) {
   return { buffer: Buffer.from(res.data), contentType };
 }
 
+/**
+ * Fetch a node's display name (original filename). Mirrors Python `get_node_metadata`
+ * used by `cdn_publisher.publish` to tag the S3 object with `original-filename`.
+ * Best-effort: returns `${nodeId}.pdf` if the name can't be read.
+ * @returns {Promise<string>}
+ */
+async function getNodeName(nodeId) {
+  const res = await withTicket((ticket) => fetchNode(ticket, nodeId));
+  return nodeTitle(res.data) || `${nodeId}.pdf`;
+}
+
 const YEAR_PREFIX = /^\d{4}-\d{2}-/;
 
 /**
@@ -280,6 +291,7 @@ module.exports = {
   pingNode,
   listFolder,
   downloadDocument,
+  getNodeName,
   categorize,
   NODE_TYPE_DOCUMENT,
   // exported for unit tests

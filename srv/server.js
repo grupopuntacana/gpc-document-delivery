@@ -3,9 +3,15 @@
 const cds = require('@sap/cds');
 
 const opentext = require('./lib/opentext');
+const cdn = require('./lib/cdn');
 const { resolveToken, InvalidToken } = require('./lib/token');
 
 const LOG = cds.log('invoice');
+
+// Option A vs B toggle. `stream` (default) serves the PDF bytes straight from OpenText;
+// `cdn` returns a 302 to a short-lived CloudFront signed URL backed by an S3 cache.
+// Flip via OPENTEXT_DELIVERY_MODE so both paths can be benchmarked with no code change.
+const DELIVERY_MODE = process.env.OPENTEXT_DELIVERY_MODE === 'cdn' ? 'cdn' : 'stream';
 
 /**
  * Anonymous customer-facing document route — the load-bearing piece, ported from
@@ -33,14 +39,24 @@ cds.on('bootstrap', (app) => {
       throw err;
     }
     try {
+      if (DELIVERY_MODE === 'cdn') {
+        // Option B: ensure the PDF is in the S3 cache and 302 to a CloudFront signed URL.
+        // The browser follows the redirect to the CDN edge, so repeat fetches never touch
+        // OpenText. The URL contract (`/invoice/:token`) is unchanged.
+        const url = await cdn.publish(payload.nodeId);
+        const ms = Math.round(Number(process.hrtime.bigint() - t0) / 1e6);
+        LOG.info(`redirect node=${payload.nodeId} mode=cdn in ${ms} ms`);
+        return res.redirect(302, url);
+      }
+      // Option A: stream the bytes straight from OpenText.
       const { buffer, contentType } = await opentext.downloadDocument(payload.nodeId);
       const ms = Math.round(Number(process.hrtime.bigint() - t0) / 1e6);
-      LOG.info(`served node=${payload.nodeId} bytes=${buffer.length} in ${ms} ms`);
+      LOG.info(`served node=${payload.nodeId} bytes=${buffer.length} mode=stream in ${ms} ms`);
       res.setHeader('Content-Type', contentType || 'application/pdf');
       res.setHeader('Content-Disposition', `inline; filename="document-${payload.nodeId}.pdf"`);
       return res.send(buffer);
     } catch (err) {
-      LOG.error(`fetch failed node=${payload.nodeId}: ${err.message}`);
+      LOG.error(`fetch failed node=${payload.nodeId} mode=${DELIVERY_MODE}: ${err.message}`);
       return res.status(502).send(`fetch failed: ${err.message}`);
     }
   });
