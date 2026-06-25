@@ -25,6 +25,8 @@
 const http = require('http');
 const https = require('https');
 
+const LOG = require('@sap/cds').log('opentext');
+
 // Routed through an overridable `deps` object so unit tests can patch the
 // transport without mocking SAP Cloud SDK internals (see test/selftest.test.js).
 const deps = {
@@ -96,12 +98,23 @@ function fetchNode(ticket, nodeId) {
  * every OTCS operation gets the same OTDSTicket-on-every-call + single-retry behavior.
  */
 async function withTicket(fn) {
+  // Timing split so logs separate the OTDS auth round trip (candidate for ticket
+  // caching) from the actual OTCS operation. Both currently pay a fresh TLS
+  // handshake because keep-alive is disabled (see noKeepAlive note above).
+  const t0 = process.hrtime.bigint();
   let ticket = await authenticate();
+  const t1 = process.hrtime.bigint();
+  const ms = (a, b) => Math.round(Number(b - a) / 1e6);
   try {
-    return await fn(ticket);
+    const out = await fn(ticket);
+    // info (not debug) so it's visible in cf logs without raising the log level
+    // while we measure; lower to debug once the perf work is settled.
+    LOG.info(`withTicket: authMs=${ms(t0, t1)} callMs=${ms(t1, process.hrtime.bigint())}`);
+    return out;
   } catch (err) {
     if (status(err) !== 401) throw err;
     ticket = await authenticate(); // single retry
+    LOG.debug(`withTicket: re-auth after 401 (authMs=${ms(t0, t1)})`);
     return fn(ticket);
   }
 }
