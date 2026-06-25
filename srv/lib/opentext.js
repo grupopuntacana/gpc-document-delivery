@@ -79,6 +79,38 @@ async function authenticate() {
   return ticket;
 }
 
+// In-memory single-flight cache for the OTDS ticket. The ticket is reusable across
+// requests, so re-authenticating on every listing wastes a full OTDS round trip
+// (~600ms, measured). We cache the in-flight *promise* so a concurrent burst shares
+// one auth, and use a conservative TTL — staleness is self-correcting because
+// `withTicket` re-auths once on a 401 (forceRefresh) and the OTDS ticket lifetime is
+// far longer than this. Set OTDS_TICKET_TTL_MS=0 to disable (tests).
+const TICKET_TTL_MS = Number(
+  process.env.OTDS_TICKET_TTL_MS != null ? process.env.OTDS_TICKET_TTL_MS : 10 * 60 * 1000
+);
+let _ticketPromise = null;
+let _ticketExpires = 0;
+
+/** Cached OTDS ticket; `forceRefresh` re-authenticates and replaces the cache (post-401). */
+function getTicket(forceRefresh = false) {
+  const now = Date.now();
+  if (!forceRefresh && _ticketPromise && now < _ticketExpires) return _ticketPromise;
+  _ticketExpires = now + TICKET_TTL_MS;
+  _ticketPromise = authenticate();
+  // Drop a cached rejection so the next call retries instead of serving a stuck error.
+  _ticketPromise.catch(() => {
+    _ticketPromise = null;
+    _ticketExpires = 0;
+  });
+  return _ticketPromise;
+}
+
+/** Clear the cached ticket (tests / forced refresh). */
+function clearTicketCache() {
+  _ticketPromise = null;
+  _ticketExpires = 0;
+}
+
 /** Issue an OTCS request with the OTDSTicket header. `cfg` is an http-client request config. */
 function otcsRequest(ticket, cfg) {
   return deps.executeHttpRequest(
@@ -102,7 +134,7 @@ async function withTicket(fn) {
   // caching) from the actual OTCS operation. Both currently pay a fresh TLS
   // handshake because keep-alive is disabled (see noKeepAlive note above).
   const t0 = process.hrtime.bigint();
-  let ticket = await authenticate();
+  let ticket = await getTicket(); // cached — authMs ~0 on a cache hit
   const t1 = process.hrtime.bigint();
   const ms = (a, b) => Math.round(Number(b - a) / 1e6);
   try {
@@ -113,7 +145,7 @@ async function withTicket(fn) {
     return out;
   } catch (err) {
     if (status(err) !== 401) throw err;
-    ticket = await authenticate(); // single retry
+    ticket = await getTicket(true); // stale ticket — force re-auth and retry once
     LOG.debug(`withTicket: re-auth after 401 (authMs=${ms(t0, t1)})`);
     return fn(ticket);
   }
@@ -229,6 +261,8 @@ module.exports = {
   // exported for unit tests
   deps,
   authenticate,
+  getTicket,
+  clearTicketCache,
   fetchNode,
   nodeTitle,
   withTicket,

@@ -35,6 +35,9 @@ describe('opentext.pingNode', () => {
   }
 
   beforeEach(() => {
+    // The OTDS ticket is cached in-memory across requests; clear it so each case
+    // starts cold and its authenticate() expectations hold.
+    opentext.clearTicketCache();
     opentext.deps.getDestination = vi.fn(async () => ({
       username: 'Admin',
       password: 'secret',
@@ -97,5 +100,23 @@ describe('opentext.pingNode', () => {
 
     await expect(opentext.pingNode(2000)).rejects.toThrow();
     expect(getCount).toBe(1); // no retry
+  });
+
+  it('reuses the cached OTDS ticket across requests (authenticates once)', async () => {
+    let ticketsIssued = 0;
+    opentext.deps.executeHttpRequest.mockImplementation(async (_dest, cfg) => {
+      if (cfg.method === 'POST') {
+        ticketsIssued += 1;
+        return { status: 200, data: { ticket: `TICKET-${ticketsIssued}` } };
+      }
+      return nodeResponse('Enterprise');
+    });
+
+    const a = await opentext.pingNode(2000);
+    const b = await opentext.pingNode(2000);
+
+    expect(a.ok).toBe(true);
+    expect(b.ok).toBe(true);
+    expect(ticketsIssued).toBe(1); // second listing reused the cached ticket
   });
 });
