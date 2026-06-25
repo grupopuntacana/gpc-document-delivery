@@ -41,7 +41,7 @@ modules:
       # Credential Store (paid) deferred during validation — SHARED_LINK_SECRET
       # is supplied via env (see README). Re-enable this line + the resource below
       # to switch to Credential Store; credstore.js auto-detects the binding.
-      # - name: gpc-docdelivery-credstore
+      - name: gpc-docdelivery-credstore
       - name: gpc-docdelivery-logs
 
   # Deploys the built portal SPA to the Application Frontend service and
@@ -121,11 +121,11 @@ resources:
   # the Credential Store; credstore.js switches automatically once the binding exists.
   # Holds: SHARED_LINK_SECRET (password) + CloudFrontPrivateKey (key) under a namespace.
   # Confirm the plan name on this tenant ("free" on trial; "standard" otherwise).
-  # - name: gpc-docdelivery-credstore
-  #   type: org.cloudfoundry.managed-service
-  #   parameters:
-  #     service: credstore
-  #     service-plan: free
+  - name: gpc-docdelivery-credstore
+    type: org.cloudfoundry.managed-service
+    parameters:
+      service: credstore
+      service-plan: standard
   - name: gpc-docdelivery-logs
     type: org.cloudfoundry.managed-service
     parameters:
