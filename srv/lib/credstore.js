@@ -7,8 +7,10 @@
  * and the CloudFront private key from a bound Credential Store service at runtime
  * — instead of from `.env` like the Python prototype (`src/token_redirect.py::_secret`).
  *
- * Credential Store has no official npm SDK. Access is its REST API, authenticated
- * with the bound instance's `username`/`password` (Basic) plus a namespace header.
+ * Credential Store has no official npm SDK. Access is its REST API plus a namespace
+ * header. Newer instances are provisioned with `authentication.type: mtls`, so the
+ * binding ships a client `certificate` + `key` (X.509) that we present via mutual TLS.
+ * Older Basic-auth instances expose `username`/`password` instead — we support both.
  * Responses come back as a compact JWE encrypted to the binding's client key pair;
  * we decrypt with `encryption.client_private_key` (RSA-OAEP-256 / A256GCM).
  *
@@ -21,6 +23,7 @@
 
 const crypto = require('crypto');
 const fs = require('fs');
+const https = require('https');
 
 const NAMESPACE = process.env.CREDSTORE_NAMESPACE || 'gpc-document-delivery';
 
@@ -49,29 +52,75 @@ function binding() {
 }
 
 /**
+ * GET over mutual TLS (client cert + key) using the built-in https module, so we
+ * don't pull in undici/axios just to present a client certificate. Returns the raw
+ * text body (the Credential Store responds with a compact JWE).
+ */
+function httpsGet(urlStr, { cert, key, headers }) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(urlStr);
+    const req = https.request(
+      {
+        hostname: u.hostname,
+        port: u.port || 443,
+        path: u.pathname + u.search,
+        method: 'GET',
+        cert,
+        key,
+        headers,
+      },
+      (res) => {
+        let body = '';
+        res.setEncoding('utf8');
+        res.on('data', (d) => (body += d));
+        res.on('end', () => resolve({ status: res.statusCode, body }));
+      }
+    );
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+/**
  * Fetch and decrypt one entry from the Credential Store REST API.
  * `kind` is 'password' or 'key'. Returns the parsed entry object.
+ *
+ * Auth: mTLS when the binding carries a `certificate` + `key` (the current default),
+ * else Basic auth via `username`/`password` (legacy instances).
  */
 async function fetchEntry(creds, kind, name) {
   const { compactDecrypt } = await import('jose');
 
   const url = `${creds.url}/${kind}?name=${encodeURIComponent(name)}`;
-  const auth = Buffer.from(`${creds.username}:${creds.password}`).toString('base64');
+  const headers = {
+    'sapcp-credstore-namespace': NAMESPACE,
+    Accept: 'application/json;charset=UTF-8',
+  };
 
-  const res = await fetch(url, {
-    method: 'GET',
-    headers: {
-      Authorization: `Basic ${auth}`,
-      'sapcp-credstore-namespace': NAMESPACE,
-      Accept: 'application/json;charset=UTF-8',
-    },
-  });
-  if (!res.ok) {
-    throw new Error(`Credential Store ${kind}/${name} -> HTTP ${res.status}`);
+  let status;
+  let jwe;
+  if (creds.certificate && creds.key) {
+    // mTLS: present the binding's client certificate.
+    ({ status, body: jwe } = await httpsGet(url, {
+      cert: creds.certificate,
+      key: creds.key,
+      headers,
+    }));
+  } else {
+    // Legacy Basic auth.
+    const auth = Buffer.from(`${creds.username}:${creds.password}`).toString('base64');
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: { ...headers, Authorization: `Basic ${auth}` },
+    });
+    status = res.status;
+    jwe = await res.text();
+  }
+  if (status < 200 || status >= 300) {
+    throw new Error(`Credential Store ${kind}/${name} -> HTTP ${status}`);
   }
 
   // Response body is a compact JWE encrypted to our client key.
-  const jwe = await res.text();
   const privateKey = crypto.createPrivateKey({
     key: Buffer.from(creds.encryption.client_private_key, 'base64'),
     format: 'der',

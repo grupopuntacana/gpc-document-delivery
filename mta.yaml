@@ -16,6 +16,10 @@ modules:
   - name: gpc-docdelivery-srv
     type: nodejs
     path: gen/srv
+    properties:
+      # Non-secret config: the OpenText folder (objId) the portal lists.
+      # 52480 = demo folder holding the invoice/energy PDFs.
+      OPENTEXT_FOLDER_ID: "52480"
     parameters:
       instances: 1
       buildpack: nodejs_buildpack
