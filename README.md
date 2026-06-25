@@ -91,19 +91,38 @@ request body. Override the destination names with `OPENTEXT_OTDS_DESTINATION` /
 `OPENTEXT_OTCS_DESTINATION` if needed.
 
 ### Credential Store
-Namespace defaults to `gpc-document-delivery` (override with `CREDSTORE_NAMESPACE`). After
-binding, create:
+Namespace defaults to `gpc-document-delivery` (override with `CREDSTORE_NAMESPACE`).
+
+There is **no `cf` plugin and no cockpit editor** for Credential Store entries — writes go
+through its REST API, and the request body must be a JWE encrypted to the store's public
+key (the mirror of the JWE-decrypt `credstore.js` does on reads). `scripts/credstore-put.js`
+does that encryption + POST for you, reusing the bound service key:
 
 ```bash
-# password entry — the HMAC secret (mirror of the Python .env value)
-cf csv-set-value <credstore-instance> <namespace> password SHARED_LINK_SECRET --value '<64-char-secret>'
-# key entry — the CloudFront signing private key (PEM)
-cf csv-set-value <credstore-instance> <namespace> key  CloudFrontPrivateKey --value "$(cat ../python/opentext-cdn-prototype/secrets/cloudfront_private_key.pem)"
+# 1. One-time: a service key exposes the binding (url, mTLS cert/key, encryption keys)
+cf create-service-key gpc-docdelivery-credstore cli
+export CREDSTORE_CREDS="$(cf service-key gpc-docdelivery-credstore cli | tail -n +2)"
+
+# 2. Write the entries credstore.js reads (namespace from CREDSTORE_NAMESPACE, default above)
+node scripts/credstore-put.js password SHARED_LINK_SECRET    '<64-char-secret>'
+node scripts/credstore-put.js key      CloudFrontPrivateKey  "$(cat ../python/opentext-cdn-prototype/secrets/cloudfront_private_key.pem)"
+# Option B (cdn mode) also needs the S3 credentials:
+node scripts/credstore-put.js password AWS_ACCESS_KEY_ID     '<aws-access-key-id>'
+node scripts/credstore-put.js password AWS_SECRET_ACCESS_KEY '<aws-secret-access-key>'
+
+# 3. Cleanup once done — the service key carries live binding creds
+cf delete-service-key gpc-docdelivery-credstore cli
 ```
 
-> The exact CLI/cockpit steps depend on the tenant's Credential Store tooling; the reader
-> in `credstore.js` expects a `password` entry named `SHARED_LINK_SECRET` and a `key` entry
-> named `CloudFrontPrivateKey` under the namespace above.
+> `credstore.js` expects: `password` entries `SHARED_LINK_SECRET`, `AWS_ACCESS_KEY_ID`,
+> `AWS_SECRET_ACCESS_KEY`, and a `key` entry `CloudFrontPrivateKey` (stored base64, as the
+> reader expects), all under the namespace above.
+>
+> **Write-API gotchas** (handled by the script, noted here so they're not rediscovered):
+> the JWE protected header must carry an `iat` in **epoch seconds** and be **< 2 minutes
+> old** (replay guard); algorithms are fixed to `RSA-OAEP-256` + `A256GCM`; `Content-Type`
+> must be `application/jose`. No redeploy is needed after a write — `credstore.js` re-reads
+> on the next request — but `cf restage gpc-docdelivery-srv` forces a clean instance.
 
 ## Hybrid testing (local code, live BTP services)
 
