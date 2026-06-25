@@ -7,6 +7,9 @@ describe('credstore (env fallback)', () => {
   beforeEach(() => {
     vi.resetModules();
     delete process.env.SHARED_LINK_SECRET;
+    // The secret is cached in-memory; clear it so each case starts cold
+    // (vi.resetModules doesn't reset the CommonJS instance from createRequire).
+    require('../srv/lib/credstore.js').clearSecretCache();
   });
 
   it('reads SHARED_LINK_SECRET from env when no binding is present', async () => {

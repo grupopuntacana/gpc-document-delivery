@@ -130,11 +130,21 @@ async function fetchEntry(creds, kind, name) {
   return JSON.parse(Buffer.from(plaintext).toString('utf8'));
 }
 
-/**
- * The HMAC secret used to verify sharing tokens.
- * @returns {Promise<string>} the raw secret string (UTF-8), never logged.
- */
-async function getSharedLinkSecret() {
+// In-memory single-flight cache for the HMAC secret. The secret is process-stable
+// (the same value across every app instance), so a per-instance memo is correct and
+// far cheaper than a Credential Store round trip per token — listing N documents mints
+// N tokens, each of which needs the secret. We cache the in-flight *promise* (not just
+// the resolved value) so a concurrent burst (Promise.all over the listing) collapses to
+// ONE fetch instead of N. A short TTL lets a rotated secret be picked up without a
+// restart; set CREDSTORE_SECRET_TTL_MS=0 to disable caching (tests).
+const SECRET_TTL_MS = Number(
+  process.env.CREDSTORE_SECRET_TTL_MS != null ? process.env.CREDSTORE_SECRET_TTL_MS : 10 * 60 * 1000
+);
+let _secretPromise = null;
+let _secretExpires = 0;
+
+/** Uncached read of the secret (credstore binding, else env fallback). */
+async function readSharedLinkSecret() {
   const creds = binding();
   if (creds) {
     const entry = await fetchEntry(creds, 'password', 'SHARED_LINK_SECRET');
@@ -148,6 +158,31 @@ async function getSharedLinkSecret() {
     );
   }
   return fromEnv;
+}
+
+/**
+ * The HMAC secret used to verify sharing tokens. Cached in-memory (single-flight,
+ * TTL `CREDSTORE_SECRET_TTL_MS`) so repeated token mint/verify don't re-hit the store.
+ * @returns {Promise<string>} the raw secret string (UTF-8), never logged.
+ */
+async function getSharedLinkSecret() {
+  const now = Date.now();
+  if (_secretPromise && now < _secretExpires) return _secretPromise;
+  _secretExpires = now + SECRET_TTL_MS;
+  _secretPromise = readSharedLinkSecret();
+  // On failure, drop the cached rejection so the next call retries instead of
+  // serving a stuck error for the whole TTL window.
+  _secretPromise.catch(() => {
+    _secretPromise = null;
+    _secretExpires = 0;
+  });
+  return _secretPromise;
+}
+
+/** Clear the cached secret (tests / forced refresh after a known rotation). */
+function clearSecretCache() {
+  _secretPromise = null;
+  _secretExpires = 0;
 }
 
 /**
@@ -180,5 +215,6 @@ module.exports = {
   getSharedLinkSecret,
   getCloudFrontPrivateKey,
   isBound,
+  clearSecretCache,
   NAMESPACE,
 };
