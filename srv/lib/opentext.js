@@ -75,10 +75,9 @@ const NODE_TYPE_DOCUMENT = 144;
 // size, so we ask for just those via the `fields` query param to cut server-side work
 // and payload. Env-overridable as an escape hatch: set OTCS_LIST_FIELDS='' to revert
 // to the full (unfiltered) response without a code change if a tenant rejects the param.
-const LIST_FIELDS =
-  process.env.OTCS_LIST_FIELDS != null
-    ? process.env.OTCS_LIST_FIELDS
-    : 'properties{id,name,type,size}';
+const LIST_FIELDS = process.env.OTCS_LIST_FIELDS != null
+  ? process.env.OTCS_LIST_FIELDS
+  : 'properties{id,name,type,size}';
 
 // --- destination names (env-overridable for hybrid/test, defaults match the BTP cockpit) ---
 const DEST_OTDS = process.env.OPENTEXT_OTDS_DESTINATION || 'OpenText_OTDS';
@@ -99,7 +98,7 @@ async function authenticate() {
       data: { user_name: dest.username, password: dest.password },
       disableCsrfTokenFetch: true,
       ...otdsAgents,
-    }
+    },
   );
   const ticket = res.data && res.data.ticket;
   if (!ticket) throw new Error('OTDS authentication returned no ticket');
@@ -113,7 +112,7 @@ async function authenticate() {
 // `withTicket` re-auths once on a 401 (forceRefresh) and the OTDS ticket lifetime is
 // far longer than this. Set OTDS_TICKET_TTL_MS=0 to disable (tests).
 const TICKET_TTL_MS = Number(
-  process.env.OTDS_TICKET_TTL_MS != null ? process.env.OTDS_TICKET_TTL_MS : 10 * 60 * 1000
+  process.env.OTDS_TICKET_TTL_MS != null ? process.env.OTDS_TICKET_TTL_MS : 10 * 60 * 1000,
 );
 let _ticketPromise = null;
 let _ticketExpires = 0;
@@ -142,7 +141,7 @@ function clearTicketCache() {
 function otcsRequest(ticket, cfg) {
   return deps.executeHttpRequest(
     { destinationName: DEST_OTCS },
-    { ...cfg, headers: { OTDSTicket: ticket, ...(cfg.headers || {}) }, ...otcsAgents }
+    { ...cfg, headers: { OTDSTicket: ticket, ...(cfg.headers || {}) }, ...otcsAgents },
   );
 }
 
@@ -180,8 +179,7 @@ async function withTicket(fn) {
 
 /** Pull the node title out of an OTCS v2 node response, defensively. */
 function nodeTitle(data) {
-  const props =
-    data && data.results && data.results.data && data.results.data.properties;
+  const props = data && data.results && data.results.data && data.results.data.properties;
   return (props && (props.name || props.title)) || null;
 }
 
@@ -221,7 +219,8 @@ function flattenChildren(payload) {
  * List the document children of a folder, shaped for the portal listing.
  * Mirrors demo/server.py `_discover_documents`: keep only documents (type 144),
  * derive (category, subtitle) from the filename.
- * @returns {Promise<Array<{nodeId:number,name:string,sizeBytes:number,category:string,subtitle:string}>>}
+ * @returns {Promise<Array<{nodeId:number, name:string, sizeBytes:number,
+ *   category:string, subtitle:string}>>}
  */
 async function listFolder(folderId) {
   let url = `${OTCS_NODES_PATH}/${folderId}/nodes`;
@@ -233,7 +232,9 @@ async function listFolder(folderId) {
       const nodeId = Number(c.id);
       const name = c.name || `node-${nodeId}`;
       const { category, subtitle } = categorize(name);
-      return { nodeId, name, sizeBytes: Number(c.size || 0), category, subtitle };
+      return {
+        nodeId, name, sizeBytes: Number(c.size || 0), category, subtitle,
+      };
     });
 }
 
@@ -242,17 +243,14 @@ async function listFolder(folderId) {
  * @returns {Promise<{buffer:Buffer,contentType:string}>}
  */
 async function downloadDocument(nodeId) {
-  const res = await withTicket((ticket) =>
-    otcsRequest(ticket, {
-      method: 'GET',
-      url: `${OTCS_NODES_PATH}/${nodeId}/content`,
-      responseType: 'arraybuffer',
-    })
-  );
-  const contentType =
-    (res.headers &&
-      (res.headers['content-type'] || res.headers['Content-Type'])) ||
-    'application/pdf';
+  const res = await withTicket((ticket) => otcsRequest(ticket, {
+    method: 'GET',
+    url: `${OTCS_NODES_PATH}/${nodeId}/content`,
+    responseType: 'arraybuffer',
+  }));
+  const contentType = (res.headers
+      && (res.headers['content-type'] || res.headers['Content-Type']))
+    || 'application/pdf';
   return { buffer: Buffer.from(res.data), contentType };
 }
 

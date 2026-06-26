@@ -72,9 +72,11 @@ function httpsGet(urlStr, { cert, key, headers }) {
       (res) => {
         let body = '';
         res.setEncoding('utf8');
-        res.on('data', (d) => (body += d));
+        res.on('data', (d) => {
+          body += d;
+        });
         res.on('end', () => resolve({ status: res.statusCode, body }));
-      }
+      },
     );
     req.on('error', reject);
     req.end();
@@ -137,9 +139,7 @@ async function fetchEntry(creds, kind, name) {
 // the resolved value) so a concurrent burst (Promise.all over the listing) collapses to
 // ONE fetch instead of N. A short TTL lets a rotated secret be picked up without a
 // restart; set CREDSTORE_SECRET_TTL_MS=0 to disable caching (tests).
-const SECRET_TTL_MS = Number(
-  process.env.CREDSTORE_SECRET_TTL_MS != null ? process.env.CREDSTORE_SECRET_TTL_MS : 10 * 60 * 1000
-);
+const SECRET_TTL_MS = Number(process.env.CREDSTORE_SECRET_TTL_MS ?? 10 * 60 * 1000);
 let _secretPromise = null;
 let _secretExpires = 0;
 
@@ -153,8 +153,8 @@ async function readSharedLinkSecret() {
   const fromEnv = process.env.SHARED_LINK_SECRET;
   if (!fromEnv) {
     throw new Error(
-      'SHARED_LINK_SECRET unavailable: no credstore binding and env var unset. ' +
-        'Bind the Credential Store, or set SHARED_LINK_SECRET for local/hybrid runs.'
+      'SHARED_LINK_SECRET unavailable: no credstore binding and env var unset. '
+        + 'Bind the Credential Store, or set SHARED_LINK_SECRET for local/hybrid runs.',
     );
   }
   return fromEnv;
@@ -202,7 +202,7 @@ async function getCloudFrontPrivateKey() {
     return fs.readFileSync(process.env.CLOUDFRONT_PRIVATE_KEY_PATH, 'utf8');
   }
   throw new Error(
-    'CloudFront private key unavailable: no credstore binding and no CLOUDFRONT_PRIVATE_KEY[_PATH].'
+    'CloudFront private key unavailable: no credstore binding and no CLOUDFRONT_PRIVATE_KEY[_PATH].',
   );
 }
 
@@ -212,7 +212,7 @@ async function getCloudFrontPrivateKey() {
 // pair of fetches. Short TTL picks up a rotation without a restart;
 // set CREDSTORE_AWS_TTL_MS=0 to disable (tests).
 const AWS_TTL_MS = Number(
-  process.env.CREDSTORE_AWS_TTL_MS != null ? process.env.CREDSTORE_AWS_TTL_MS : 10 * 60 * 1000
+  process.env.CREDSTORE_AWS_TTL_MS != null ? process.env.CREDSTORE_AWS_TTL_MS : 10 * 60 * 1000,
 );
 let _awsPromise = null;
 let _awsExpires = 0;
@@ -231,8 +231,8 @@ async function readAwsCredentials() {
   const secretAccessKey = process.env.AWS_SECRET_ACCESS_KEY;
   if (!accessKeyId || !secretAccessKey) {
     throw new Error(
-      'AWS credentials unavailable: no credstore binding and AWS_ACCESS_KEY_ID/' +
-        'AWS_SECRET_ACCESS_KEY unset. Bind the Credential Store, or set them for local/hybrid runs.'
+      'AWS credentials unavailable: no credstore binding and AWS_ACCESS_KEY_ID/'
+        + 'AWS_SECRET_ACCESS_KEY unset. Bind the Credential Store, or set them for local/hybrid runs.',
     );
   }
   return { accessKeyId, secretAccessKey };
@@ -262,7 +262,10 @@ function clearAwsCache() {
   _awsExpires = 0;
 }
 
-/** Diagnostic: are we reading from a live Credential Store binding (true) or env fallback (false)? */
+/**
+ * Diagnostic: are we reading from a live Credential Store binding (true)
+ * or env fallback (false)?
+ */
 function isBound() {
   return binding() !== null;
 }

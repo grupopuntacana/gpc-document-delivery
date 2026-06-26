@@ -16,14 +16,21 @@
     "@cap-js/cds-test": "^1.0.1",
     "@cap-js/sqlite": "^2.4",
     "@sap/cds-dk": "^9",
+    "@sap/eslint-plugin-cds": "^4",
+    "eslint": "^9.39.4",
+    "eslint-config-airbnb-extended": "^3.1.0",
     "vitest": "^4.1.9"
   },
   "scripts": {
     "start": "cds-serve",
     "watch": "cds watch",
     "watch:hybrid": "cds watch --profile hybrid",
+    "lint": "eslint . --max-warnings 0",
     "test": "vitest run",
     "test:watch": "vitest"
+  },
+  "overrides": {
+    "@eslint/js": "^9"
   },
   "cds": {
     "requires": {

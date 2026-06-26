@@ -1,4 +1,6 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import {
+  describe, it, expect, beforeEach,
+} from 'vitest';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
@@ -18,7 +20,7 @@ describe('token (HMAC mint/verify, Python-compatible)', () => {
   it('produces compact, sorted-keys JSON exactly like Python json.dumps', () => {
     expect(token.canonicalPayload(2000, 1718804000, null)).toBe('{"e":1718804000,"n":2000}');
     expect(token.canonicalPayload(2000, 1718804000, 'cust-1')).toBe(
-      '{"c":"cust-1","e":1718804000,"n":2000}'
+      '{"c":"cust-1","e":1718804000,"n":2000}',
     );
   });
 

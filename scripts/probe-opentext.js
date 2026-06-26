@@ -13,9 +13,9 @@
  *   ../python/opentext-cdn-prototype/.env  (OTCS_USERNAME / OTCS_PASSWORD / *_BASE_URL)
  *
  * Usage:
- *   node scripts/probe-opentext.js                  # OTCS as NoAuth (matches Python: OTDSTicket only)
- *   OTCS_AUTH=basic node scripts/probe-opentext.js  # OTCS as BasicAuth (matches deployed dest: adds Authorization)
- *   FOLDER_ID=2000 node scripts/probe-opentext.js   # also exercise listFolder
+ *   node scripts/probe-opentext.js                 # NoAuth OTCS (Python parity: OTDSTicket only)
+ *   OTCS_AUTH=basic node scripts/probe-opentext.js # BasicAuth (deployed dest adds Authorization)
+ *   FOLDER_ID=2000 node scripts/probe-opentext.js  # also exercise listFolder
  */
 
 const fs = require('fs');

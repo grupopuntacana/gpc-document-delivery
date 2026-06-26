@@ -1,4 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import {
+  describe, it, expect, vi, beforeEach,
+} from 'vitest';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
@@ -22,7 +24,7 @@ describe('credstore (env fallback)', () => {
   it('throws a clear error when secret is unavailable', async () => {
     const credstore = require('../srv/lib/credstore.js');
     await expect(credstore.getSharedLinkSecret()).rejects.toThrow(
-      /SHARED_LINK_SECRET unavailable/
+      /SHARED_LINK_SECRET unavailable/,
     );
   });
 });
@@ -58,7 +60,7 @@ describe('opentext.pingNode', () => {
     expect(result.nodeTitle).toBe('Enterprise');
 
     const getCall = opentext.deps.executeHttpRequest.mock.calls.find(
-      ([, c]) => c.method === 'GET'
+      ([, c]) => c.method === 'GET',
     );
     expect(getCall[1].headers.OTDSTicket).toBe('TICKET-1');
     expect(getCall[1].url).toContain('/nodes/2000');
@@ -127,8 +129,20 @@ describe('opentext.pingNode', () => {
         status: 200,
         data: {
           results: [
-            { data: { properties: { id: 1, name: 'factura-01.pdf', type: 144, size: 2048 } } },
-            { data: { properties: { id: 2, name: 'a-subfolder', type: 0, size: 0 } } }, // not a doc
+            {
+              data: {
+                properties: {
+                  id: 1, name: 'factura-01.pdf', type: 144, size: 2048,
+                },
+              },
+            },
+            {
+              data: {
+                properties: {
+                  id: 2, name: 'a-subfolder', type: 0, size: 0,
+                },
+              },
+            }, // not a doc
           ],
         },
       };
@@ -143,6 +157,8 @@ describe('opentext.pingNode', () => {
 
     // only the type-144 document survives, shaped for the portal
     expect(docs).toHaveLength(1);
-    expect(docs[0]).toMatchObject({ nodeId: 1, name: 'factura-01.pdf', sizeBytes: 2048, category: 'invoice' });
+    expect(docs[0]).toMatchObject({
+      nodeId: 1, name: 'factura-01.pdf', sizeBytes: 2048, category: 'invoice',
+    });
   });
 });

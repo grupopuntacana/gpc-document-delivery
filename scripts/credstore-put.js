@@ -11,7 +11,7 @@
  * Usage:
  *   cf create-service-key gpc-docdelivery-credstore cli
  *   export CREDSTORE_CREDS="$(cf service-key gpc-docdelivery-credstore cli | tail -n +2)"
- *   node scripts/credstore-put.js key      CloudFrontPrivateKey  "$(cat /path/to/cloudfront_private_key.pem)"
+ *   node scripts/credstore-put.js key      CloudFrontPrivateKey "$(cat cloudfront_private_key.pem)"
  *   node scripts/credstore-put.js password AWS_ACCESS_KEY_ID     'AKIA...'
  *   node scripts/credstore-put.js password AWS_SECRET_ACCESS_KEY '...'
  *
@@ -52,7 +52,7 @@ function serverPublicKey(creds) {
   const b64 = enc.server_public_key || enc.serverPublicKey;
   if (!b64) {
     usage(
-      'binding has no encryption.server_public_key — keys present: ' + Object.keys(enc).join(', ')
+      `binding has no encryption.server_public_key — keys present: ${Object.keys(enc).join(', ')}`,
     );
   }
   return crypto.createPublicKey({ key: Buffer.from(b64, 'base64'), format: 'der', type: 'spki' });
@@ -75,9 +75,11 @@ function httpsPost(urlStr, body, { cert, key, headers }) {
       (res) => {
         let b = '';
         res.setEncoding('utf8');
-        res.on('data', (d) => (b += d));
+        res.on('data', (d) => {
+          b += d;
+        });
         res.on('end', () => resolve({ status: res.statusCode, body: b }));
-      }
+      },
     );
     req.on('error', reject);
     req.write(body);
@@ -96,10 +98,9 @@ async function main() {
 
   // A `key` entry stores base64-encoded material; credstore.js base64-decodes it on read.
   // A `password` entry stores the raw string.
-  const entry =
-    kind === 'key'
-      ? { name, value: Buffer.from(value, 'utf8').toString('base64'), format: 'pem' }
-      : { name, value };
+  const entry = kind === 'key'
+    ? { name, value: Buffer.from(value, 'utf8').toString('base64'), format: 'pem' }
+    : { name, value };
 
   // The store requires an `iat` (issued-at) header — epoch *seconds*, and rejected if
   // missing or older than 2 minutes (replay guard). Algorithms are fixed by the service:

@@ -95,7 +95,8 @@ modules:
       commands:
         - npm ci
         - npm run build
-      supported-platforms: []
+      supported-platforms:
+        []
 
 resources:
   # IAS-only auth, matching ../bookshop. The app uses `authenticated-user`

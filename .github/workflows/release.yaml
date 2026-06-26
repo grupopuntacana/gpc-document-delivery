@@ -1,0 +1,21 @@
+name: Release
+
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  deployments: write
+
+jobs:
+  tests:
+     uses: grupopuntacana/gpc-document-delivery/.github/workflows/test.yaml@master
+     secrets: inherit
+  deploy-cf:
+    needs: [tests]
+    uses: grupopuntacana/gpc-document-delivery/.github/workflows/cf.yaml@master
+    secrets: inherit
+    with:
+      environment: Production

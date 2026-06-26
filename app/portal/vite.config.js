@@ -1,15 +1,16 @@
-import { defineConfig } from 'vite'
-import AdmZip from 'adm-zip'
-import vue from '@vitejs/plugin-vue'
+import { defineConfig } from 'vite';
+import AdmZip from 'adm-zip';
+import vue from '@vitejs/plugin-vue';
 
 export default defineConfig({
   plugins: [vue(), {
-      name: 'zip-dist', // zipping ./dist is required for BTP HTML5 repo or Application Frontend deployment
-      closeBundle() {
-        const zip = new AdmZip()
-        zip.addLocalFolder('dist')
-        zip.writeZip('dist/portal.zip')
-      }
+    // Zipping ./dist is required for BTP HTML5 repo / Application Frontend deployment.
+    name: 'zip-dist',
+    closeBundle() {
+      const zip = new AdmZip();
+      zip.addLocalFolder('dist');
+      zip.writeZip('dist/portal.zip');
+    },
   }],
   server: {
     proxy: {
@@ -19,10 +20,10 @@ export default defineConfig({
       '/odata': {
         target: 'http://localhost:4004',
         changeOrigin: true,
-        headers: { Authorization: 'Basic YWxpY2U6' }
+        headers: { Authorization: 'Basic YWxpY2U6' },
       },
       // The anonymous customer-facing PDF route (token is the credential).
-      '/invoice': 'http://localhost:4004'
-    }
-  }
-})
+      '/invoice': 'http://localhost:4004',
+    },
+  },
+});
