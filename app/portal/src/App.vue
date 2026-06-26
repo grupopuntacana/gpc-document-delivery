@@ -41,37 +41,76 @@ onMounted(load)
 <template>
   <header>
     <h1>GPC Document Delivery</h1>
-    <div class="sub">Portal de documentos · OpenText → CloudFront</div>
+    <div class="sub">
+      Portal de documentos · OpenText → CloudFront
+    </div>
   </header>
 
   <main>
     <div class="toolbar">
-      <button class="btn secondary" :disabled="loading" @click="load">
+      <button
+        class="btn secondary"
+        :disabled="loading"
+        @click="load"
+      >
         {{ loading ? 'Cargando…' : 'Refrescar' }}
       </button>
     </div>
 
-    <p v-if="error" class="error">No se pudieron cargar los documentos: {{ error }}</p>
+    <p
+      v-if="error"
+      class="error"
+    >
+      No se pudieron cargar los documentos: {{ error }}
+    </p>
 
-    <section v-for="g in groups" :key="g.key">
+    <section
+      v-for="g in groups"
+      :key="g.key"
+    >
       <h2>{{ g.title }}</h2>
       <table>
         <thead>
-          <tr><th>{{ g.periodLabel }}</th><th class="right">Tamaño</th><th></th></tr>
+          <tr>
+            <th>{{ g.periodLabel }}</th><th class="right">
+              Tamaño
+            </th><th />
+          </tr>
         </thead>
         <tbody>
           <tr v-if="!byCategory[g.key].length">
-            <td colspan="3" class="empty">{{ loading ? 'Cargando…' : '—' }}</td>
-          </tr>
-          <tr v-for="d in byCategory[g.key]" :key="d.nodeId">
-            <td>
-              <div class="name">{{ d.displayName }}</div>
-              <div class="subtitle">{{ d.subtitle }}</div>
-              <div class="stable-url">/invoice/{{ d.token.slice(0, 18) }}…</div>
+            <td
+              colspan="3"
+              class="empty"
+            >
+              {{ loading ? 'Cargando…' : '—' }}
             </td>
-            <td class="right">{{ formatSize(d.sizeBytes) }}</td>
+          </tr>
+          <tr
+            v-for="d in byCategory[g.key]"
+            :key="d.nodeId"
+          >
+            <td>
+              <div class="name">
+                {{ d.displayName }}
+              </div>
+              <div class="subtitle">
+                {{ d.subtitle }}
+              </div>
+              <div class="stable-url">
+                /invoice/{{ d.token.slice(0, 18) }}…
+              </div>
+            </td>
             <td class="right">
-              <a class="btn" :href="invoiceUrl(d.token)" target="_blank" rel="noopener">Open PDF</a>
+              {{ formatSize(d.sizeBytes) }}
+            </td>
+            <td class="right">
+              <a
+                class="btn"
+                :href="invoiceUrl(d.token)"
+                target="_blank"
+                rel="noopener"
+              >Open PDF</a>
             </td>
           </tr>
         </tbody>

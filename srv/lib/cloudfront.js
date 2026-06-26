@@ -58,13 +58,7 @@ function awsBase64(buf) {
  * fixed key order) — the bytes are what gets signed, so any drift breaks verification.
  */
 function cannedPolicy(url, expiresEpoch) {
-  return (
-    '{"Statement":[{"Resource":"' +
-    url +
-    '","Condition":{"DateLessThan":{"AWS:EpochTime":' +
-    expiresEpoch +
-    '}}}]}'
-  );
+  return `{"Statement":[{"Resource":"${url}","Condition":{"DateLessThan":{"AWS:EpochTime":${expiresEpoch}}}}]}`;
 }
 
 /**
@@ -91,7 +85,7 @@ function signCloudFrontUrl(url, privateKeyPem, keyPairIdVal, expiresEpoch) {
 // collapses to ONE fetch. Short TTL lets a rotated key be picked up without a restart;
 // set CLOUDFRONT_KEY_TTL_MS=0 to disable (tests).
 const KEY_TTL_MS = Number(
-  process.env.CLOUDFRONT_KEY_TTL_MS != null ? process.env.CLOUDFRONT_KEY_TTL_MS : 10 * 60 * 1000
+  process.env.CLOUDFRONT_KEY_TTL_MS != null ? process.env.CLOUDFRONT_KEY_TTL_MS : 10 * 60 * 1000,
 );
 let _keyPromise = null;
 let _keyExpires = 0;

@@ -1,4 +1,6 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import {
+  describe, it, expect, beforeEach, vi,
+} from 'vitest';
 import { createRequire } from 'node:module';
 import crypto from 'node:crypto';
 
@@ -35,13 +37,16 @@ function fakeSdk(sent, headBehavior) {
     constructor(cfg) {
       this.cfg = cfg;
     }
+
     async send(cmd) {
       sent.push({ type: cmd._t, input: cmd.input });
       if (cmd._t === 'head') return headBehavior();
       return {};
     }
   }
-  return { S3Client, HeadObjectCommand, PutObjectCommand, DeleteObjectCommand };
+  return {
+    S3Client, HeadObjectCommand, PutObjectCommand, DeleteObjectCommand,
+  };
 }
 
 function notFound() {
@@ -52,7 +57,10 @@ function notFound() {
 }
 
 describe('cdn (S3 write-through cache)', () => {
-  let cdn, cloudfront, opentext, sent;
+  let cdn;
+  let cloudfront;
+  let opentext;
+  let sent;
 
   beforeEach(() => {
     process.env.AWS_REGION = 'us-east-1';
@@ -116,13 +124,12 @@ describe('cdn (S3 write-through cache)', () => {
   });
 
   it('objectExists rethrows non-404 errors (does not swallow real failures)', async () => {
-    cdn.deps.loadS3Sdk = () =>
-      fakeSdk(sent, () => {
-        const err = new Error('AccessDenied');
-        err.name = 'AccessDenied';
-        err.$metadata = { httpStatusCode: 403 };
-        throw err;
-      });
+    cdn.deps.loadS3Sdk = () => fakeSdk(sent, () => {
+      const err = new Error('AccessDenied');
+      err.name = 'AccessDenied';
+      err.$metadata = { httpStatusCode: 403 };
+      throw err;
+    });
     await expect(cdn.publish(2000)).rejects.toThrow(/AccessDenied/);
   });
 

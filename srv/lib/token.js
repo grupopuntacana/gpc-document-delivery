@@ -30,7 +30,10 @@ function b64dRaw(str) {
   return Buffer.from(str, 'base64url');
 }
 
-/** Compact, sorted-keys JSON exactly as Python's json.dumps(..., separators=(",",":"), sort_keys=True). */
+/**
+ * Compact, sorted-keys JSON exactly as Python's
+ * json.dumps(..., separators=(",",":"), sort_keys=True).
+ */
 function canonicalPayload(nodeId, expiryEpoch, customerId) {
   const obj = { e: Math.trunc(expiryEpoch), n: Math.trunc(nodeId) };
   if (customerId) obj.c = customerId;

@@ -33,7 +33,7 @@ module.exports = class PortalService extends cds.ApplicationService {
             subtitle: d.subtitle,
             sizeBytes: d.sizeBytes,
             token: await token.makeToken(d.nodeId, { ttlDays: TOKEN_TTL_DAYS }),
-          }))
+          })),
         );
         const t2 = process.hrtime.bigint();
         const ms = (a, b) => Math.round(Number(b - a) / 1e6);
@@ -41,7 +41,7 @@ module.exports = class PortalService extends cds.ApplicationService {
         // Per-phase timing at debug — raise the `portal` logger to debug to see it
         // (see README "Debugging with logs"). listMs=OpenText, tokenMs=secret+HMAC.
         LOG.debug(
-          `documents timing: listMs=${ms(t0, t1)} tokenMs=${ms(t1, t2)} totalMs=${ms(t0, t2)}`
+          `documents timing: listMs=${ms(t0, t1)} tokenMs=${ms(t1, t2)} totalMs=${ms(t0, t2)}`,
         );
         return rows;
       } catch (err) {

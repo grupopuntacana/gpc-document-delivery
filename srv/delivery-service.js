@@ -38,7 +38,7 @@ module.exports = class SelfTestService extends cds.ApplicationService {
       try {
         const result = await opentext.pingNode(2000);
         LOG.info(
-          `pingOpenText ok=${result.ok} status=${result.status} ms=${result.ms}`
+          `pingOpenText ok=${result.ok} status=${result.status} ms=${result.ms}`,
         );
         return result;
       } catch (err) {

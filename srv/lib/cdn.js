@@ -18,11 +18,10 @@
  * the `deps` seam so tests can inject a mock without standing up real AWS.
  */
 
+const LOG = require('@sap/cds').log('cdn');
 const credstore = require('./credstore');
 const cloudfront = require('./cloudfront');
 const opentext = require('./opentext');
-
-const LOG = require('@sap/cds').log('cdn');
 
 function awsRegion() {
   return process.env.AWS_REGION || 'us-east-1';
@@ -91,10 +90,10 @@ async function objectExists(key) {
     // S3 head returns 404 (or NotFound/NoSuchKey) on a miss; anything else is a real error.
     const code = err && (err.name || (err.$metadata && err.$metadata.httpStatusCode));
     if (
-      code === 'NotFound' ||
-      code === 'NoSuchKey' ||
-      code === 404 ||
-      (err && err.$metadata && err.$metadata.httpStatusCode === 404)
+      code === 'NotFound'
+      || code === 'NoSuchKey'
+      || code === 404
+      || (err && err.$metadata && err.$metadata.httpStatusCode === 404)
     ) {
       return false;
     }
@@ -133,7 +132,7 @@ async function publish(nodeId) {
           'source-of-truth': 'opentext',
           'cache-only': 'true',
         },
-      })
+      }),
     );
     LOG.info(`cached node=${nodeId} bytes=${buffer.length} key=${key}`);
   }

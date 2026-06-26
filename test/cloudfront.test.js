@@ -1,4 +1,6 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import {
+  describe, it, expect, beforeEach, afterEach,
+} from 'vitest';
 import { createRequire } from 'node:module';
 import crypto from 'node:crypto';
 
@@ -32,7 +34,7 @@ describe('cloudfront (canned-policy signing, Python-compatible)', () => {
   it('cannedPolicy is byte-exact (compact, fixed key order)', () => {
     const url = 'https://cdn.example.net/documents/2000.pdf';
     expect(cloudfront.cannedPolicy(url, 1718804000)).toBe(
-      `{"Statement":[{"Resource":"${url}","Condition":{"DateLessThan":{"AWS:EpochTime":1718804000}}}]}`
+      `{"Statement":[{"Resource":"${url}","Condition":{"DateLessThan":{"AWS:EpochTime":1718804000}}}]}`,
     );
   });
 
@@ -75,7 +77,7 @@ describe('cloudfront (canned-policy signing, Python-compatible)', () => {
     const signed = cloudfront.signCloudFrontUrl(url, PEM, 'KP', expires);
     const sigSlice = signed.slice(
       `${url}?Expires=${expires}&Signature=`.length,
-      signed.indexOf('&Key-Pair-Id=')
+      signed.indexOf('&Key-Pair-Id='),
     );
     // Reverse the AWS alphabet back to standard base64 to recover the signature bytes.
     const std = sigSlice.replace(/-/g, '+').replace(/_/g, '=').replace(/~/g, '/');
@@ -89,7 +91,7 @@ describe('cloudfront (canned-policy signing, Python-compatible)', () => {
     const nowSec = Math.floor(Date.now() / 1000);
     const url = await cloudfront.signedUrlForNode(2000);
     expect(url.startsWith('https://d3ef18l0vjlle9.cloudfront.net/documents/2000.pdf?Expires=')).toBe(
-      true
+      true,
     );
     expect(url).toContain('&Key-Pair-Id=KOZINHBBRK0NV');
     const expires = Number(new URL(url).searchParams.get('Expires'));
