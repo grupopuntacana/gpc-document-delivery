@@ -16,6 +16,19 @@ const TOKEN_TTL_DAYS = Number(process.env.PORTAL_TOKEN_TTL_DAYS || 7);
 
 module.exports = class PortalService extends cds.ApplicationService {
   init() {
+    // Surface the authenticated identity for the SPA header. CAP parses the IAS token into
+    // req.user: `id` is the username/email, `attr.<claim>` exposes token claims. Falls back
+    // to `id` so the name/email are never blank under mocked hybrid auth (e.g. 'alice').
+    this.on('whoami', (req) => {
+      const u = req.user;
+      const a = u.attr || {};
+      return {
+        id: u.id,
+        name: [a.given_name, a.family_name].filter(Boolean).join(' ') || u.id,
+        email: a.email || u.id,
+      };
+    });
+
     this.on('documents', async (req) => {
       try {
         // Per-phase timing so the logs reveal where a listing spends its time:

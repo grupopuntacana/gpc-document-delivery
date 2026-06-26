@@ -19,6 +19,11 @@ export async function listDocuments() {
   return body.value || [];
 }
 
+// Current logged-in user (from the IAS token via PortalService.whoami).
+export async function currentUser() {
+  return odata('portal/whoami()');
+}
+
 // Stable customer-facing URL for a document token.
 export function invoiceUrl(token) {
   return `/invoice/${token}`;

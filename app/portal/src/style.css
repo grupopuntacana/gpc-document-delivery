@@ -1,20 +1,55 @@
+/* GPC Document Delivery — design system.
+   Editorial-corporate: navy anchor, warm amber accent, Fraunces × Hanken Grotesk. */
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,600&family=Hanken+Grotesk:wght@400;500;600;700&display=swap');
+
 :root {
-  --text: #111;
-  --text-muted: #777;
-  --bg: #fff;
-  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
+  color-scheme: light;
+
+  /* Brand */
+  --navy: #0b2545;
+  --navy-700: #163970;
+  --navy-50: #eef3fb;
+  --amber: #d98a2b;
+  --amber-50: #fbf3e6;
+
+  /* Surfaces */
+  --bg: #f4f6fa;
+  --surface: #ffffff;
+  --line: #e4e8f0;
+  --line-soft: #eef1f6;
+
+  /* Ink */
+  --ink: #14213a;
+  --ink-muted: #5e6a82;
+  --ink-faint: #95a0b5;
+
+  /* Feedback */
+  --ok-bg: #e7f6ec; --ok-fg: #1b6b3a;
+  --err-bg: #fdeaea; --err-fg: #a32020;
+
+  /* Type */
+  --display: 'Fraunces', Georgia, serif;
+  --sans: 'Hanken Grotesk', system-ui, sans-serif;
+  --mono: ui-monospace, 'SF Mono', Menlo, monospace;
+
+  --shadow-sm: 0 1px 2px rgba(11, 37, 69, 0.05);
+  --shadow-md: 0 8px 28px -12px rgba(11, 37, 69, 0.22);
+
   font-family: var(--sans);
+  color: var(--ink);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --text: #fff;
-    --text-muted: #a3a3a3;
-    --bg: #16171d;
-  }
-}
+* { box-sizing: border-box; }
 
 body {
-  color: var(--text);
-  background: var(--bg);
+  margin: 0;
+  color: var(--ink);
+  /* Faint cool wash so white cards lift off the page */
+  background:
+    radial-gradient(1200px 600px at 100% -10%, #e9eef8 0%, transparent 55%),
+    var(--bg);
+  min-height: 100vh;
 }
