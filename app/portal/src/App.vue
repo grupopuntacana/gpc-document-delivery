@@ -8,6 +8,7 @@ const error = ref('')
 const uploading = ref(false)
 const dragOver = ref(false)
 const uploadMsg = ref('')
+const uploadErr = ref('')
 
 const groups = [
   { key: 'invoice', title: 'Facturas pendientes', periodLabel: 'Documento' },
@@ -40,15 +41,21 @@ async function load() {
 
 async function upload(file) {
   if (!file) return
+  // The <input accept> only filters the file picker; the drop handler accepts anything, so
+  // validate the type here too before sending non-PDF bytes to OpenText.
+  if (file.type && file.type !== 'application/pdf' && !/\.pdf$/i.test(file.name)) {
+    uploadErr.value = `Solo se permiten archivos PDF (recibido: ${file.type || file.name})`
+    return
+  }
   uploading.value = true
   uploadMsg.value = ''
-  error.value = ''
+  uploadErr.value = ''
   try {
     const { nodeId, name } = await uploadDocument(file)
     uploadMsg.value = `Subido: ${name} (node ${nodeId})`
     await load() // refresh the listing so the new document appears
   } catch (e) {
-    error.value = e.message
+    uploadErr.value = e.message
   } finally {
     uploading.value = false
   }
@@ -109,6 +116,13 @@ onMounted(load)
       class="notice"
     >
       {{ uploadMsg }}
+    </p>
+
+    <p
+      v-if="uploadErr"
+      class="error"
+    >
+      No se pudo subir el documento: {{ uploadErr }}
     </p>
 
     <p

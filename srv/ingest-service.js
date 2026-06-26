@@ -18,10 +18,30 @@ const FOLDER_ID = Number(
 // Match the portal's short-lived token (demo used 7 days).
 const TOKEN_TTL_DAYS = Number(process.env.PORTAL_TOKEN_TTL_DAYS || 7);
 
+// Hard ceiling on a single upload's decoded size. The file rides in the JSON body as base64
+// (≈ +33% on the wire), so this must sit comfortably under the CAP body_parser limit in
+// package.json (30mb wire ≈ ~22mb decoded). Bound it deliberately rather than relying on
+// whatever the parser happens to allow; override with OPENTEXT_MAX_UPLOAD_BYTES.
+const MAX_UPLOAD_BYTES = Number(process.env.OPENTEXT_MAX_UPLOAD_BYTES || 20 * 1024 * 1024);
+
+/**
+ * Strip characters that would break the multipart `filename="…"` framing or balloon the
+ * stored name, before the name is used for dedup, storage and the response. Mirrors the
+ * defensive strip in opentext.uploadDocument so the returned name == the stored name.
+ */
+function sanitizeName(fileName) {
+  return String(fileName).replace(/[\r\n"\\]/g, '_').slice(0, 255);
+}
+
 /**
  * Django-style dedup, mirroring demo/server.py: keep the original filename; on a collision
  * append an 8-hex-char UUID suffix before the extension ('invoice.pdf' → 'invoice_a3f2b1c8.pdf').
  * One-shot, no retry loop.
+ *
+ * Best-effort and TOCTOU by design (read folder → pick name → upload): two simultaneous
+ * uploads of the same name can both see "no collision" and both store it. The Python
+ * reference has the same shape; acceptable for the single-writer ingest seed. Hardening to a
+ * create-node conflict + retry is deferred with the multi-tenant ingest auth model (ADR 0005).
  */
 async function uniqueName(folderId, fileName) {
   const existing = new Set(await opentext.listFolderChildNames(folderId));
@@ -42,11 +62,16 @@ module.exports = class IngestService extends cds.ApplicationService {
       if (!fileName) return req.reject(400, 'fileName is required');
       if (!contentBase64) return req.reject(400, 'contentBase64 is required');
 
+      // Buffer.from(.,'base64') silently drops invalid chars, so an all-whitespace/symbol
+      // string decodes to zero bytes — hence "empty or undecodable" (we don't distinguish).
       const buffer = Buffer.from(contentBase64, 'base64');
-      if (buffer.length === 0) return req.reject(400, 'empty or invalid base64 content');
+      if (buffer.length === 0) return req.reject(400, 'empty or undecodable content');
+      if (buffer.length > MAX_UPLOAD_BYTES) {
+        return req.reject(413, `file too large: ${buffer.length} bytes (max ${MAX_UPLOAD_BYTES})`);
+      }
 
       try {
-        const name = await uniqueName(FOLDER_ID, fileName);
+        const name = await uniqueName(FOLDER_ID, sanitizeName(fileName));
         const nodeId = await opentext.uploadDocument(
           FOLDER_ID,
           buffer,

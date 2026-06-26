@@ -34,6 +34,11 @@
     "@eslint/js": "^9"
   },
   "cds": {
+    "server": {
+      "body_parser": {
+        "limit": "30mb"
+      }
+    },
     "requires": {
       "app-front": true,
       "destinations": true,

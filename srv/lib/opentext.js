@@ -332,15 +332,19 @@ function extractNodeId(payload) {
  * @returns {Promise<number>} the new node id
  */
 async function uploadDocument(parentFolderId, fileBuffer, name, contentType = 'application/pdf') {
+  // Defensive: the `form-data` package does NOT escape CR/LF/quote/backslash in `filename=`,
+  // so a crafted name could break the multipart framing. Strip those before they hit the
+  // wire (callers should sanitize too; this keeps the library safe regardless).
+  const safeName = String(name).replace(/[\r\n"\\]/g, '_').slice(0, 255);
   const bodyJson = JSON.stringify({
     parent_id: Number(parentFolderId),
     type: NODE_TYPE_DOCUMENT,
-    name,
+    name: safeName,
   });
   const res = await withTicket((ticket) => {
     const form = new FormData();
     form.append('body', bodyJson); // plain text field, like Python data={"body": ...}
-    form.append('file', fileBuffer, { filename: name, contentType });
+    form.append('file', fileBuffer, { filename: safeName, contentType });
     return otcsRequest(
       ticket,
       {

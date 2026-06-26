@@ -38,6 +38,10 @@ function fileToBase64(file) {
 // The file rides as base64 in the JSON body (matches IngestService.uploadDocument).
 export async function uploadDocument(file) {
   const contentBase64 = await fileToBase64(file);
+  // Same-origin POST: auth is injected upstream — the approuter/app-front forwards the JWT in
+  // prod, the Vite proxy forwards Basic mocked-auth in hybrid dev — so no `credentials`/token
+  // handling is needed here. (For large PDFs this base64-in-JSON path holds ~3× the file in
+  // memory; if this UI outgrows the demo, switch to a multipart `FormData` POST.)
   const res = await fetch('/odata/v4/ingest/uploadDocument', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },

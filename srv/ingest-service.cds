@@ -22,7 +22,7 @@ service IngestService {
     contentType   : String,      // MIME type; defaults to application/pdf when omitted
     contentBase64 : LargeString  // the file bytes, base64-encoded
   ) returns {
-    nodeId : Integer;            // new OpenText node id
+    nodeId : Int64;             // new OpenText node id (Int64: opaque id, never truncate)
     name   : String;            // stored name (original, or UUID-suffixed on collision)
     token  : String;            // sharing token for /invoice/{token}
   };

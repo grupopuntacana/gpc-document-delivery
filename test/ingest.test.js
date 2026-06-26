@@ -32,7 +32,10 @@ describe('IngestService.uploadDocument', () => {
     opentext.deps.executeHttpRequest = vi.fn();
   });
 
+  // Captures the create-node POST configs so tests can assert what was actually sent to OTCS
+  // (not just the response shape). `creates` collects each create-node cfg in call order.
   function mockTransport({ existingNames = [], newId = 9001 } = {}) {
+    const creates = [];
     opentext.deps.executeHttpRequest.mockImplementation(async (_dest, cfg) => {
       if (cfg.method === 'POST' && cfg.url.endsWith('/authentication/credentials')) {
         return { status: 200, data: { ticket: 'T' } };
@@ -48,8 +51,10 @@ describe('IngestService.uploadDocument', () => {
         };
       }
       // create-node
+      creates.push(cfg);
       return { status: 200, data: { results: { data: { properties: { id: newId } } } } };
     });
+    return { creates };
   }
 
   const b64 = (s) => Buffer.from(s).toString('base64');
@@ -67,13 +72,28 @@ describe('IngestService.uploadDocument', () => {
   });
 
   it('de-duplicates a colliding filename with an 8-hex UUID suffix', async () => {
-    mockTransport({ existingNames: ['invoice.pdf'], newId: 9002 });
+    const { creates } = mockTransport({ existingNames: ['invoice.pdf'], newId: 9002 });
     const { data } = await POST('/odata/v4/ingest/uploadDocument', {
       fileName: 'invoice.pdf',
       contentBase64: b64('%PDF-1.7 hello'),
     });
     expect(data.name).toMatch(/^invoice_[0-9a-f]{8}\.pdf$/);
     expect(data.name).not.toBe('invoice.pdf');
+
+    // the RENAMED name must be what we actually POST to OTCS, not the original — guards a
+    // refactor silently storing 'invoice.pdf' while returning the renamed name to the client
+    const payload = creates[0].data.toString('utf8');
+    expect(payload).toContain(`"name":"${data.name}"`);
+    expect(payload).toContain(`filename="${data.name}"`);
+  });
+
+  it('defaults contentType to application/pdf when omitted', async () => {
+    const { creates } = mockTransport({ newId: 9003 });
+    await POST('/odata/v4/ingest/uploadDocument', {
+      fileName: 'invoice.pdf',
+      contentBase64: b64('%PDF-1.7 hello'),
+    });
+    expect(creates[0].data.toString('utf8')).toContain('Content-Type: application/pdf');
   });
 
   it('rejects an empty file', async () => {
@@ -81,5 +101,24 @@ describe('IngestService.uploadDocument', () => {
     await expect(
       POST('/odata/v4/ingest/uploadDocument', { fileName: 'x.pdf', contentBase64: '' }),
     ).rejects.toMatchObject({ response: { status: 400 } });
+  });
+
+  it('translates an OpenText failure into a 502', async () => {
+    // create-node fails → IngestService should surface describeError() as a 502, not a 500.
+    opentext.deps.executeHttpRequest.mockImplementation(async (_dest, cfg) => {
+      if (cfg.method === 'POST' && cfg.url.endsWith('/authentication/credentials')) {
+        return { status: 200, data: { ticket: 'T' } };
+      }
+      if (cfg.method === 'GET') return { status: 200, data: { results: [] } };
+      const err = new Error('Internal Server Error');
+      err.response = { status: 500, data: 'boom' };
+      throw err;
+    });
+    await expect(
+      POST('/odata/v4/ingest/uploadDocument', {
+        fileName: 'invoice.pdf',
+        contentBase64: b64('%PDF-1.7 hello'),
+      }),
+    ).rejects.toMatchObject({ response: { status: 502 } });
   });
 });
