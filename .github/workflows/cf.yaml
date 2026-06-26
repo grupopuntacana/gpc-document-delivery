@@ -46,8 +46,10 @@ jobs:
 
       - run: cf logs "${{ env.APP_NAME }}-srv" --recent
         if: always()
-      - run: cf logs "${{ env.APP_NAME }}-db-deployer" --recent
-        if: always()
+      # Temporarily disabled — no db-deployer module yet (no persistence layer).
+      # Re-enable once a HANA/db module is added to mta.yaml.
+      # - run: cf logs "${{ env.APP_NAME }}-db-deployer" --recent
+      #   if: always()
 
       - name: Get application URL
         id: route
