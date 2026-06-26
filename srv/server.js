@@ -40,20 +40,25 @@ cds.on('bootstrap', (app) => {
     }
     try {
       if (DELIVERY_MODE === 'cdn') {
-        // Option B: ensure the PDF is in the S3 cache and 302 to a CloudFront signed URL.
+        // Option B: ensure the file is in the S3 cache and 302 to a CloudFront signed URL.
         // The browser follows the redirect to the CDN edge, so repeat fetches never touch
-        // OpenText. The URL contract (`/invoice/:token`) is unchanged.
+        // OpenText. The URL contract (`/invoice/:token`) is unchanged. Like the stream path,
+        // any file type is served correctly — cdn.publish bakes the real content-type and
+        // filename onto the cached object so CloudFront returns them as response headers.
         const url = await cdn.publish(payload.nodeId);
         const ms = Math.round(Number(process.hrtime.bigint() - t0) / 1e6);
         LOG.info(`redirect node=${payload.nodeId} mode=cdn in ${ms} ms`);
         return res.redirect(302, url);
       }
-      // Option A: stream the bytes straight from OpenText.
-      const { buffer, contentType } = await opentext.downloadDocument(payload.nodeId);
+      // Option A: stream the bytes straight from OpenText. The content-type and filename come
+      // from OpenText so any uploaded format (PDF, photo, office doc) is served correctly —
+      // the browser renders it inline and a "Save As" gets the right name and extension.
+      const { buffer, contentType, fileName } = await opentext.downloadDocument(payload.nodeId);
+      const name = opentext.downloadFileName(payload.nodeId, contentType, fileName);
       const ms = Math.round(Number(process.hrtime.bigint() - t0) / 1e6);
-      LOG.info(`served node=${payload.nodeId} bytes=${buffer.length} mode=stream in ${ms} ms`);
-      res.setHeader('Content-Type', contentType || 'application/pdf');
-      res.setHeader('Content-Disposition', `inline; filename="document-${payload.nodeId}.pdf"`);
+      LOG.info(`served node=${payload.nodeId} bytes=${buffer.length} type=${contentType} mode=stream in ${ms} ms`);
+      res.setHeader('Content-Type', contentType || 'application/octet-stream');
+      res.setHeader('Content-Disposition', `inline; filename="${name}"`);
       return res.send(buffer);
     } catch (err) {
       const reason = opentext.describeError(err);

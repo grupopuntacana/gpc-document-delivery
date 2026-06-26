@@ -84,6 +84,7 @@ describe('cdn (S3 write-through cache)', () => {
     opentext.downloadDocument = vi.fn(async () => ({
       buffer: Buffer.from('%PDF-1.7 fake'),
       contentType: 'application/pdf',
+      fileName: 'factura-01.pdf',
     }));
     opentext.getNodeName = vi.fn(async () => 'factura-01.pdf');
   });
@@ -101,6 +102,7 @@ describe('cdn (S3 write-through cache)', () => {
       Bucket: 'opentext-cdn-cache-gpc',
       Key: 'documents/2000.pdf',
       ContentType: 'application/pdf',
+      ContentDisposition: 'inline; filename="factura-01.pdf"',
       Metadata: {
         'opentext-node-id': '2000',
         'original-filename': 'factura-01.pdf',
@@ -110,6 +112,58 @@ describe('cdn (S3 write-through cache)', () => {
     });
     expect(url).toContain('https://d3ef18l0vjlle9.cloudfront.net/documents/2000.pdf?Expires=');
     expect(url).toContain('&Key-Pair-Id=KOZINHBBRK0NV');
+  });
+
+  it('cache MISS: a non-PDF (camera photo) is cached with its real type + filename', async () => {
+    cdn.deps.loadS3Sdk = () => fakeSdk(sent, notFound);
+    // OTCS reports a generic type but the node name carries the real extension — the cdn
+    // path must recover the content-type so CloudFront serves it as an image, not a PDF.
+    opentext.downloadDocument = vi.fn(async () => ({
+      buffer: Buffer.from([0xFF, 0xD8, 0xFF, 0xE0]),
+      contentType: 'application/octet-stream',
+      fileName: null,
+    }));
+    opentext.getNodeName = vi.fn(async () => 'rambo-thumbs-up.png');
+
+    await cdn.publish(172488);
+
+    const put = sent.find((c) => c.type === 'put');
+    expect(put.input).toMatchObject({
+      ContentType: 'image/png',
+      ContentDisposition: 'inline; filename="rambo-thumbs-up.png"',
+    });
+  });
+
+  it('cache MISS: when getNodeName cannot read the name, the disposition filename drives type', async () => {
+    cdn.deps.loadS3Sdk = () => fakeSdk(sent, notFound);
+    // getNodeName fails to resolve a name (returns null) — the download's Content-Disposition
+    // filename must still drive both the content-type and the served filename (not default PDF).
+    opentext.downloadDocument = vi.fn(async () => ({
+      buffer: Buffer.from([0xFF, 0xD8, 0xFF, 0xE0]),
+      contentType: 'application/octet-stream',
+      fileName: 'photo.jpg',
+    }));
+    opentext.getNodeName = vi.fn(async () => null);
+
+    await cdn.publish(2000);
+
+    const put = sent.find((c) => c.type === 'put');
+    expect(put.input).toMatchObject({
+      ContentType: 'image/jpeg',
+      ContentDisposition: 'inline; filename="photo.jpg"',
+    });
+  });
+
+  it('cache MISS: a non-ASCII filename is URL-encoded in S3 metadata', async () => {
+    cdn.deps.loadS3Sdk = () => fakeSdk(sent, notFound);
+    opentext.getNodeName = vi.fn(async () => 'résumé.pdf');
+
+    await cdn.publish(2000);
+
+    const put = sent.find((c) => c.type === 'put');
+    // metadata must be US-ASCII; the disposition header keeps the human-readable name
+    expect(put.input.Metadata['original-filename']).toBe('r%C3%A9sum%C3%A9.pdf');
+    expect(put.input.ContentDisposition).toBe('inline; filename="résumé.pdf"');
   });
 
   it('cache HIT: skips download + PutObject, still returns a signed URL', async () => {

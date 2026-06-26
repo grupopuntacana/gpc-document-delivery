@@ -51,8 +51,10 @@ export async function uploadDocument(file) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify({
-      fileName: file.name,
-      contentType: file.type || 'application/pdf',
+      // Camera captures and most files carry their own MIME; fall back to a generic binary
+      // type (not PDF) when the browser can't determine it.
+      fileName: file.name || 'upload',
+      contentType: file.type || 'application/octet-stream',
       contentBase64,
     }),
   });

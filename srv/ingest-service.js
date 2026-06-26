@@ -25,15 +25,6 @@ const TOKEN_TTL_DAYS = Number(process.env.PORTAL_TOKEN_TTL_DAYS || 7);
 const MAX_UPLOAD_BYTES = Number(process.env.OPENTEXT_MAX_UPLOAD_BYTES || 20 * 1024 * 1024);
 
 /**
- * Strip characters that would break the multipart `filename="…"` framing or balloon the
- * stored name, before the name is used for dedup, storage and the response. Mirrors the
- * defensive strip in opentext.uploadDocument so the returned name == the stored name.
- */
-function sanitizeName(fileName) {
-  return String(fileName).replace(/[\r\n"\\]/g, '_').slice(0, 255);
-}
-
-/**
  * Django-style dedup, mirroring demo/server.py: keep the original filename; on a collision
  * append an 8-hex-char UUID suffix before the extension ('invoice.pdf' → 'invoice_a3f2b1c8.pdf').
  * One-shot, no retry loop.
@@ -71,12 +62,14 @@ module.exports = class IngestService extends cds.ApplicationService {
       }
 
       try {
-        const name = await uniqueName(FOLDER_ID, sanitizeName(fileName));
+        // Sanitize before dedup/storage/response so the returned name == the stored name and
+        // can't break the multipart framing (shared rule with the download path).
+        const name = await uniqueName(FOLDER_ID, opentext.sanitizeFileName(fileName));
         const nodeId = await opentext.uploadDocument(
           FOLDER_ID,
           buffer,
           name,
-          contentType || 'application/pdf',
+          contentType || 'application/octet-stream',
         );
         const tok = await token.makeToken(nodeId, { ttlDays: TOKEN_TTL_DAYS });
         LOG.info(`uploaded "${fileName}" as "${name}" -> node ${nodeId} (${buffer.length} bytes)`);

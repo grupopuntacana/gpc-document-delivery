@@ -252,7 +252,7 @@ async function listFolder(folderId) {
 
 /**
  * Download a document's bytes from OpenText.
- * @returns {Promise<{buffer:Buffer,contentType:string}>}
+ * @returns {Promise<{buffer:Buffer,contentType:string,fileName:(string|null)}>}
  */
 async function downloadDocument(nodeId) {
   const res = await withTicket((ticket) => otcsRequest(ticket, {
@@ -260,21 +260,130 @@ async function downloadDocument(nodeId) {
     url: `${OTCS_NODES_PATH}/${nodeId}/content`,
     responseType: 'arraybuffer',
   }));
-  const contentType = (res.headers
-      && (res.headers['content-type'] || res.headers['Content-Type']))
-    || 'application/pdf';
-  return { buffer: Buffer.from(res.data), contentType };
+  // The SAP Cloud SDK (axios underneath) lowercases response header names.
+  const headers = res.headers || {};
+  // OTCS usually echoes the stored filename here — the source of truth for the extension.
+  const fileName = filenameFromDisposition(headers['content-disposition']);
+  // Serve OTCS's content-type, but if it's missing or a generic octet-stream, recover the real
+  // type from the filename extension so the browser renders the file inline (a camera JPEG
+  // shows as an image) instead of mis-handling it. This is what makes non-PDF delivery work.
+  const contentType = resolveContentType(headers['content-type'], fileName);
+  return { buffer: Buffer.from(res.data), contentType, fileName };
+}
+
+/**
+ * Strip characters that would break a multipart `filename="…"` part or a Content-Disposition
+ * header (CR/LF/quote/backslash) and bound the length. Shared by upload (multipart framing)
+ * and download (response header) so the rule lives in one place. (Length is in JS code units,
+ * not UTF-8 bytes — fine for OTCS / Content-Disposition, which tolerate multi-byte names.)
+ */
+function sanitizeFileName(name) {
+  return String(name).replace(/[\r\n"\\]/g, '_').slice(0, 255);
+}
+
+// MIME → extension, but ONLY for types whose extension differs from the MIME subtype — every
+// other type (image/png, application/zip, …) is handled by the subtype fallback in
+// extensionForType. Used solely to synthesize a download name when OTCS supplies none.
+const EXT_BY_TYPE = {
+  'image/jpeg': 'jpg',
+  'text/plain': 'txt',
+  'application/msword': 'doc',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+  'application/vnd.ms-excel': 'xls',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+};
+
+// extension → MIME, for the reverse direction: recovering a renderable content-type when OTCS
+// reports none / a generic octet-stream. Only the formats worth rendering inline in a browser.
+// NOTE: deliberately NO `svg` — the /invoice route serves `Content-Disposition: inline` on the
+// portal's own origin, and an SVG can embed <script> that would run same-origin (XSS). An
+// uploaded .svg therefore stays octet-stream → the browser downloads it instead of executing it.
+const TYPE_BY_EXT = {
+  pdf: 'application/pdf',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  heic: 'image/heic',
+  tiff: 'image/tiff',
+  bmp: 'image/bmp',
+  txt: 'text/plain',
+  csv: 'text/csv',
+  json: 'application/json',
+};
+
+/** The lowercased extension of a filename, or '' if none. */
+function extensionOf(fileName) {
+  const dot = fileName ? fileName.lastIndexOf('.') : -1;
+  return dot > 0 ? fileName.slice(dot + 1).toLowerCase() : '';
+}
+
+/**
+ * Pick the content-type to serve: trust OTCS's, unless it's absent or a generic
+ * `application/octet-stream` and the filename extension names something more specific.
+ */
+function resolveContentType(reported, fileName) {
+  const base = String(reported || '').split(';')[0].trim().toLowerCase();
+  if (base && base !== 'application/octet-stream') return String(reported).trim();
+  return TYPE_BY_EXT[extensionOf(fileName)] || base || 'application/octet-stream';
+}
+
+/** Best-effort extension for a content-type. Falls back to the subtype, then `bin`. */
+function extensionForType(contentType) {
+  const base = String(contentType || '').split(';')[0].trim().toLowerCase();
+  if (EXT_BY_TYPE[base]) return EXT_BY_TYPE[base];
+  const slash = base.indexOf('/');
+  if (slash > 0) {
+    // e.g. `image/svg+xml` → `svg`; reject anything that isn't a clean token.
+    const sub = base.slice(slash + 1).split('+')[0];
+    if (/^[a-z0-9.-]{1,12}$/.test(sub)) return sub;
+  }
+  return 'bin';
+}
+
+/** Parse `filename`/`filename*` out of a Content-Disposition header; null if absent. */
+function filenameFromDisposition(disposition) {
+  if (!disposition) return null;
+  // RFC 5987 `filename*=charset'lang'name.ext` (language tag optional) wins over plain
+  // `filename=`. Allow any token between the two apostrophes so a language tag doesn't break it.
+  const star = /filename\*\s*=\s*[^']*'[^']*'([^;]+)/i.exec(disposition);
+  if (star) {
+    const value = star[1].trim();
+    try {
+      return decodeURIComponent(value);
+    } catch {
+      return value;
+    }
+  }
+  // A quoted value may legitimately contain `;`, so capture up to the closing quote; otherwise
+  // take the unquoted token up to the first `;`.
+  const quoted = /filename\s*=\s*"([^"]*)"/i.exec(disposition);
+  if (quoted) return quoted[1].trim();
+  const plain = /filename\s*=\s*([^;]+)/i.exec(disposition);
+  return plain ? plain[1].trim() : null;
+}
+
+/**
+ * The filename to serve a downloaded node under. Prefers the name OTCS stored (which already
+ * carries the right extension), otherwise synthesizes `document-<id>.<ext>` from the
+ * content-type. Always stripped of characters that could break the Content-Disposition header.
+ */
+function downloadFileName(nodeId, contentType, upstreamName) {
+  const raw = upstreamName || `document-${nodeId}.${extensionForType(contentType)}`;
+  return sanitizeFileName(raw);
 }
 
 /**
  * Fetch a node's display name (original filename). Mirrors Python `get_node_metadata`
  * used by `cdn_publisher.publish` to tag the S3 object with `original-filename`.
- * Best-effort: returns `${nodeId}.pdf` if the name can't be read.
- * @returns {Promise<string>}
+ * Best-effort: returns `null` if the name can't be read (callers fall back). Must NOT
+ * synthesize a `.pdf` name — that would make a non-PDF be served as application/pdf.
+ * @returns {Promise<string|null>}
  */
 async function getNodeName(nodeId) {
   const res = await withTicket((ticket) => fetchNode(ticket, nodeId));
-  return nodeTitle(res.data) || `${nodeId}.pdf`;
+  return nodeTitle(res.data) || null;
 }
 
 /**
@@ -335,7 +444,7 @@ async function uploadDocument(parentFolderId, fileBuffer, name, contentType = 'a
   // Defensive: the `form-data` package does NOT escape CR/LF/quote/backslash in `filename=`,
   // so a crafted name could break the multipart framing. Strip those before they hit the
   // wire (callers should sanitize too; this keeps the library safe regardless).
-  const safeName = String(name).replace(/[\r\n"\\]/g, '_').slice(0, 255);
+  const safeName = sanitizeFileName(name);
   const bodyJson = JSON.stringify({
     parent_id: Number(parentFolderId),
     type: NODE_TYPE_DOCUMENT,
@@ -415,6 +524,11 @@ module.exports = {
   listFolderChildNames,
   uploadDocument,
   downloadDocument,
+  downloadFileName,
+  extensionForType,
+  resolveContentType,
+  filenameFromDisposition,
+  sanitizeFileName,
   getNodeName,
   categorize,
   describeError,
