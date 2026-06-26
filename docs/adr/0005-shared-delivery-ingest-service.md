@@ -3,11 +3,14 @@
 - **Status:** Proposed
 - **Date:** 2026-06-25
 - **Deciders:** Felix De Gracia; to be ratified by the SAP architecture review.
-- **Lineage:** Continues the prototype ADR log (ADR 0001–0004 live in the sibling
-  prototype repo `../python/opentext-cdn-prototype/docs/adr/`). This is the first ADR
-  of the BTP/CAP track (`gpc-document-delivery`).
-- **Supersedes:** ADR 0002 (public endpoint via APIM), ADR 0003 (public endpoint via
-  FastAPI proxy), ADR 0004 (public endpoint via AWS API Gateway).
+- **Lineage:** Continues the prototype ADR log. ADR 0001 (the sharing pattern) is
+  consolidated locally as [`0001-document-sharing-pattern.md`](0001-document-sharing-pattern.md).
+  The prototype's public-endpoint ADRs 0002–0004 are consolidated as the discarded
+  [RFC 0001](../rfc/0001-public-anonymous-endpoint.md) (see "The gap at 0002–0004" in the
+  [ADR index](README.md)). This is the first ADR of the BTP/CAP track (`gpc-document-delivery`).
+- **Supersedes:** the public-endpoint trilogy — now [RFC 0001](../rfc/0001-public-anonymous-endpoint.md)
+  (APIM / FastAPI proxy / AWS API Gateway), made moot by the constraint in
+  [C1](../constraints.md#c1--integration-suite-starter-edition-has-no-anonymous-public-endpoint).
 
 ## Context
 
@@ -88,7 +91,9 @@ This *is* `GPCDocumentDeliveryCommons`, reborn as a CAP service instead of a CPI
 
 ## References
 
-- Prototype ADR 0001 (sharing pattern), 0002–0004 (public endpoint) — `../python/opentext-cdn-prototype/docs/adr/`.
+- ADR [0001](0001-document-sharing-pattern.md) (sharing pattern). The public-endpoint
+  exploration is [RFC 0001](../rfc/0001-public-anonymous-endpoint.md) (discarded); its root
+  cause is [constraint C1](../constraints.md#c1--integration-suite-starter-edition-has-no-anonymous-public-endpoint).
 - Integration Suite handoff: `../python/opentext-cdn-prototype/docs/sap-handoff/integration-suite/commons-package-manifest.md` (two-package strategy, naming, `VM_DocTypeToS3Prefix`).
 - `srv/server.js` (anonymous deliver route), `srv/lib/{opentext,token,credstore}.js`.
 - Memory: `btp-cap-pivot`, `btp-connectivity-proxy-keepalive-pinning`.

@@ -1,14 +1,24 @@
 # Architecture Decision Records
 
-This is the BTP/CAP track's ADR log. It **continues** the prototype's ADR sequence —
-ADRs **0001–0004 live in the sibling prototype repo**
-(`../python/opentext-cdn-prototype/docs/adr/`) and remain the source for the
-delivery pattern and the (now-superseded) public-endpoint decisions.
+The **active decision log** — one entry per decision we made and stand behind. An ADR is for
+choices we *maintain*; explorations we discarded live as [RFCs](../rfc/), and durable platform
+facts live in [constraints.md](../constraints.md). See [docs/README.md](../README.md) for the
+full doc taxonomy.
+
+These records were validated in the Python prototype and are now **consolidated here** — this
+repo is self-contained, the prototype is archival.
 
 | # | Title | Status |
 |---|-------|--------|
-| 0001 | Document sharing pattern (stable URL → short-lived signed URL) | Accepted *(prototype repo)* |
-| 0002 | Public endpoint via APIM | Superseded by 0005 *(prototype repo)* |
-| 0003 | Public endpoint via FastAPI proxy | Superseded by 0005 *(prototype repo)* |
-| 0004 | Public endpoint via AWS API Gateway | Superseded by 0005 *(prototype repo)* |
+| [0001](0001-document-sharing-pattern.md) | Document sharing pattern (stable URL → short-lived signed URL) | Accepted |
 | [0005](0005-shared-delivery-ingest-service.md) | Document delivery + ingest as a shared CAP service on BTP | Proposed |
+
+## The gap at 0002–0004
+
+The prototype's ADRs 0002, 0003 and 0004 were the **public-endpoint trilogy** (APIM →
+FastAPI proxy → AWS API Gateway). They were never decisions we kept — they were workarounds
+for a constraint ([C1](../constraints.md#c1--integration-suite-starter-edition-has-no-anonymous-public-endpoint)),
+and ADR 0005 dissolved the problem by moving delivery to a CAP service. They have been
+**reframed as a single discarded RFC** — see [RFC 0001](../rfc/0001-public-anonymous-endpoint.md).
+The numbers 0002–0004 are intentionally retired here so the active log shows only live
+decisions; ADR 0005 keeps its number to preserve the lineage it was created under.

@@ -11,15 +11,21 @@ Service) → serve it. **Option A** (`stream`, default) returns the PDF bytes di
 write-through cache. Toggle with `OPENTEXT_DELIVERY_MODE=stream|cdn` — no code change.
 
 `README.md` is the source of truth for BTP setup, Credential Store provisioning, and the
-debugging/timing playbook. Read it before any deploy or BTP-services task.
+debugging/timing playbook. Read it before any deploy or BTP-services task. **`docs/` is the
+self-contained knowledge base** — decisions in [`docs/adr/`](docs/adr/), discarded
+explorations in [`docs/rfc/`](docs/rfc/), durable platform facts in
+[`docs/constraints.md`](docs/constraints.md); start at [`docs/README.md`](docs/README.md) for
+the taxonomy. Prefer these over browsing the prototype repo — the architecture/decision
+knowledge is consolidated here.
 
 The original is the sibling Python prototype `../python/opentext-cdn-prototype` (validated
-the architecture and produced the latency numbers for the SAP review). Its `CLAUDE.md` is
-the reference for the porting contract — `src/token_redirect.py`, `src/cdn_publisher.py`,
-and `src/opentext_client.py` are the canonical implementations this repo ports. Consult it
-when changing `token.js`, `cloudfront.js`, or `opentext.js`. That repo also tracks a
-parallel SAP **Integration Suite** port (`docs/sap-handoff/integration-suite/`) that must
-stay token-compatible with both sides via the same `SHARED_LINK_SECRET`.
+the architecture and produced the latency numbers, now cited in `docs/`). It remains the
+**canonical implementation** reference — `src/token_redirect.py`, `src/cdn_publisher.py`, and
+`src/opentext_client.py` are what this repo ports; consult them when changing `token.js`,
+`cloudfront.js`, `cdn.js`, or `opentext.js`. It also still holds the **secret material**
+(`.env`, `secrets/cloudfront_private_key.pem` — referenced by path, never copied here) and a
+**parallel SAP Integration Suite port** (`docs/sap-handoff/integration-suite/`) that must stay
+token-compatible via the same `SHARED_LINK_SECRET`. Treat the prototype as read-only history.
 
 ## Commands
 
