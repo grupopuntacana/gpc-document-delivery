@@ -279,6 +279,10 @@ describe('opentext content-type / filename derivation', () => {
     expect(r('application/octet-stream', 'photo.jpg')).toBe('image/jpeg');
     expect(r('', 'scan.PDF')).toBe('application/pdf');
     expect(r(undefined, 'note.heic')).toBe('image/heic');
+    // trims whitespace on a trusted upstream type
+    expect(r(' image/png ', 'x.png')).toBe('image/png');
+    // SVG is deliberately NOT recovered (would run inline <script>) — stays a download
+    expect(r('application/octet-stream', 'evil.svg')).toBe('application/octet-stream');
     // unknown extension stays generic
     expect(r('application/octet-stream', 'archive.xyz')).toBe('application/octet-stream');
     expect(r(null, 'noext')).toBe('application/octet-stream');

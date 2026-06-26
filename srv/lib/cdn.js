@@ -127,8 +127,9 @@ async function publish(nodeId) {
       opentext.downloadDocument(nodeId),
       opentext.getNodeName(nodeId),
     ]);
-    // The OTCS node name is the authoritative filename; recover the type from it if the
-    // download reported a generic octet-stream (same logic the stream path uses).
+    // The OTCS node name is the authoritative filename; fall back to the download's
+    // Content-Disposition name when the name lookup couldn't read it. Recover the type from
+    // that name if the download reported a generic octet-stream (same logic the stream path uses).
     const displayName = originalName || fileName;
     const safeName = opentext.downloadFileName(nodeId, contentType, displayName);
     const type = opentext.resolveContentType(contentType, displayName);
@@ -141,7 +142,8 @@ async function publish(nodeId) {
         ContentDisposition: `inline; filename="${safeName}"`,
         Metadata: {
           'opentext-node-id': String(nodeId),
-          'original-filename': originalName,
+          // S3 user metadata must be US-ASCII; encode so a non-ASCII name (résumé.pdf) is safe.
+          'original-filename': encodeURIComponent(safeName),
           'source-of-truth': 'opentext',
           'cache-only': 'true',
         },

@@ -295,6 +295,9 @@ const EXT_BY_TYPE = {
 
 // extension → MIME, for the reverse direction: recovering a renderable content-type when OTCS
 // reports none / a generic octet-stream. Only the formats worth rendering inline in a browser.
+// NOTE: deliberately NO `svg` — the /invoice route serves `Content-Disposition: inline` on the
+// portal's own origin, and an SVG can embed <script> that would run same-origin (XSS). An
+// uploaded .svg therefore stays octet-stream → the browser downloads it instead of executing it.
 const TYPE_BY_EXT = {
   pdf: 'application/pdf',
   jpg: 'image/jpeg',
@@ -305,7 +308,6 @@ const TYPE_BY_EXT = {
   heic: 'image/heic',
   tiff: 'image/tiff',
   bmp: 'image/bmp',
-  svg: 'image/svg+xml',
   txt: 'text/plain',
   csv: 'text/csv',
   json: 'application/json',
@@ -323,7 +325,7 @@ function extensionOf(fileName) {
  */
 function resolveContentType(reported, fileName) {
   const base = String(reported || '').split(';')[0].trim().toLowerCase();
-  if (base && base !== 'application/octet-stream') return reported;
+  if (base && base !== 'application/octet-stream') return String(reported).trim();
   return TYPE_BY_EXT[extensionOf(fileName)] || base || 'application/octet-stream';
 }
 
@@ -375,12 +377,13 @@ function downloadFileName(nodeId, contentType, upstreamName) {
 /**
  * Fetch a node's display name (original filename). Mirrors Python `get_node_metadata`
  * used by `cdn_publisher.publish` to tag the S3 object with `original-filename`.
- * Best-effort: returns `${nodeId}.pdf` if the name can't be read.
- * @returns {Promise<string>}
+ * Best-effort: returns `null` if the name can't be read (callers fall back). Must NOT
+ * synthesize a `.pdf` name — that would make a non-PDF be served as application/pdf.
+ * @returns {Promise<string|null>}
  */
 async function getNodeName(nodeId) {
   const res = await withTicket((ticket) => fetchNode(ticket, nodeId));
-  return nodeTitle(res.data) || `${nodeId}.pdf`;
+  return nodeTitle(res.data) || null;
 }
 
 /**
