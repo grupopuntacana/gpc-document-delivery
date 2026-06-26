@@ -69,6 +69,11 @@ This *is* `GPCDocumentDeliveryCommons`, reborn as a CAP service instead of a CPI
 - One security boundary for both deliver and ingest (mirrors the iFlow "single boundary" intent).
 - The FastAPI proxy and the entire 0002–0004 workaround chain are retired.
 - The Commons/domain split from the handoff is preserved without Integration Suite.
+- **Delivery is now owned in-house, not handed off.** The original spike-then-handoff model
+  (we discover → a SAP Integration Suite team builds the iFlow) dissolves: with BTP CAP we own
+  the implementation directly. The handoff package's durable design content is promoted to
+  [`design/solution-overview.md`](../design/solution-overview.md); the open questions it would
+  have asked the SAP team are now our design backlog (e.g. token form → task `0004`).
 
 **Negative**
 - The central service is a **shared runtime dependency** (and a potential bottleneck / blast

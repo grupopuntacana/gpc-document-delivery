@@ -12,9 +12,9 @@ legible.
 | **Decision** | [`adr/`](adr/) | "What did we decide and what did we give up?" | Accepted → Superseded |
 | **Exploration** | [`rfc/`](rfc/) | "What did we explore, and why did we keep or **discard** it?" | Draft → Accepted / **Discarded** |
 | **Constraint** | [`constraints.md`](constraints.md) | "What platform fact bound the decision?" | durable — never superseded |
+| **Design** | [`design/`](design/) | "What's the solution, why, and what's still open?" | living |
 | **Runbook** | [`setup/`](setup/) | "How do I provision/operate this?" | living |
-| **Reference** | [`architecture-diagrams.md`](architecture-diagrams.md), [`endpoint-discovery.md`](endpoint-discovery.md) | "How does it fit together / what did we learn probing it?" | living |
-| **Handoff** | [`sap-handoff/`](sap-handoff/) | "What does another team need to take this?" | point-in-time |
+| **Reference** | [`endpoint-discovery.md`](endpoint-discovery.md) | "What did we learn probing it?" | living |
 | **Work** | [`tasks/`](tasks/) | "What is in flight right now?" | todo → done |
 
 **The distinction that matters most** (and the one this repo was reorganized around):
@@ -37,13 +37,13 @@ legible.
 - **[rfc/](rfc/)** — [0001 anonymous public endpoint](rfc/0001-public-anonymous-endpoint.md) *(discarded)*.
 - **[constraints.md](constraints.md)** — IS Starter licensing, OTDS auth gotcha, no-HANA-BLOBs,
   CC tunnel pinning, token/signing interop contracts.
-- **[architecture-diagrams.md](architecture-diagrams.md)** — component view + cache-hit/miss
-  sequence diagrams (mermaid).
+- **[design/](design/)** — [solution-overview.md](design/solution-overview.md) (the case:
+  numbers, cost, rejected alternatives, use cases, and the open design decisions we own) and
+  [architecture-diagrams.md](design/architecture-diagrams.md) (component + cache-hit/miss
+  mermaid flows).
 - **[endpoint-discovery.md](endpoint-discovery.md)** — OpenText REST endpoints probed during
   the spike, and the OTDS-federation finding.
 - **[setup/](setup/)** — AWS provisioning runbook (S3 bucket, CloudFront key pair, distribution).
-- **[sap-handoff/](sap-handoff/)** — [executive summary](sap-handoff/executive-summary.md)
-  (numbers, cost, rejected alternatives) and the [joint-session playbook](sap-handoff/playbook.md).
 - **[tasks/](tasks/)** — lightweight work tracker.
 
 For BTP setup, Credential Store, and the debugging/timing playbook, the root
@@ -62,6 +62,13 @@ do not need the prototype checked out to understand anything here — imported d
   `opentext_client.py`) that `srv/lib/{token,cloudfront,cdn,opentext}.js` port from, plus the
   built-and-discarded FastAPI `proxy/` (see [RFC 0001](rfc/0001-public-anonymous-endpoint.md)).
   Treat as **read-only history** — we don't browse it live or edit it.
+- **The SAP handoff is retired.** Delivery was originally a discovery spike to be *handed off*
+  to a SAP Integration Suite team; with the move to an owned BTP CAP app
+  ([ADR 0005](adr/0005-shared-delivery-ingest-service.md)) the two-team model dissolved. The
+  durable content of the handoff package (the design case, use cases, and open decisions) was
+  promoted into [design/solution-overview.md](design/solution-overview.md); the original
+  package — executive summary, joint-session *playbook*, and the Integration Suite manifests —
+  stays in the prototype as history.
 - **Still living only in the prototype** (a *parallel* track, intentionally not copied here):
   the SAP **Integration Suite** port under `docs/sap-handoff/integration-suite/` — package
   manifests and the live `workspace/` zips. It must stay **token-compatible** with this repo

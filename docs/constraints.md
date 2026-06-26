@@ -65,7 +65,7 @@ the DB and storage is expensive). This is the founding premise of the whole spik
 (`cache-only=true`, `source-of-truth=opentext` tags + lifecycle policy). Regulator retention
 (multi-year energy bills, 7-year invoices) lives on OpenText, never on S3. See
 [ADR 0001](adr/0001-document-sharing-pattern.md) and
-[architecture-diagrams.md](architecture-diagrams.md).
+[architecture-diagrams.md](design/architecture-diagrams.md).
 
 ---
 
