@@ -20,7 +20,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  APP_NAME: gpc-document-delivery
+  APP_NAME: gpc-docdelivery
 jobs:
   deploy:
     runs-on: ubuntu-latest

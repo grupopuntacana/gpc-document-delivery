@@ -2,19 +2,33 @@ name: Release
 
 on:
   workflow_dispatch:
-  release:
-    types: [published]
+  push:
+    tags:
+      - 'v*'   # Releases: v0.1.0, v1.0.0 — deploy the tagged commit to Production
 
 permissions:
   contents: read
+  checks: read
   deployments: write
 
 jobs:
-  tests:
-     uses: grupopuntacana/gpc-document-delivery/.github/workflows/test.yaml@master
-     secrets: inherit
+  verify-ci:
+    name: Verify CI passed
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Verify CI checks
+        uses: ./.github/actions/verify-ci
+        with:
+          service-label: deploy
+          required-checks: |
+            Code quality (ESLint)
+            Run tests (vitest)
+
   deploy-cf:
-    needs: [tests]
+    needs: [verify-ci]
     uses: grupopuntacana/gpc-document-delivery/.github/workflows/cf.yaml@master
     secrets: inherit
     with:
