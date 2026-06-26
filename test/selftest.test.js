@@ -162,3 +162,69 @@ describe('opentext.pingNode', () => {
     });
   });
 });
+
+describe('opentext.uploadDocument', () => {
+  const opentext = require('../srv/lib/opentext.js');
+
+  beforeEach(() => {
+    opentext.clearTicketCache();
+    opentext.deps.getDestination = vi.fn(async () => ({ username: 'Admin', password: 'secret' }));
+    opentext.deps.executeHttpRequest = vi.fn();
+  });
+
+  it('POSTs a multipart create-node carrying OTDSTicket and returns the new node id', async () => {
+    opentext.deps.executeHttpRequest.mockImplementation(async (_dest, cfg) => {
+      if (cfg.method === 'POST' && cfg.url.endsWith('/authentication/credentials')) {
+        return { status: 200, data: { ticket: 'TICKET-1' } };
+      }
+      // create-node response (v2 nested shape)
+      return { status: 200, data: { results: { data: { properties: { id: 52266 } } } } };
+    });
+
+    const nodeId = await opentext.uploadDocument(52480, Buffer.from('%PDF-1.7 fake'), 'invoice.pdf', 'application/pdf');
+    expect(nodeId).toBe(52266);
+
+    const post = opentext.deps.executeHttpRequest.mock.calls.find(
+      ([, c]) => c.method === 'POST' && c.url === opentext.OTCS_NODES_PATH,
+    );
+    expect(post).toBeTruthy();
+    expect(post[1].headers.OTDSTicket).toBe('TICKET-1');
+    // form-data sets a multipart boundary content-type and CSRF preflight is disabled
+    expect(String(post[1].headers['content-type'])).toMatch(/^multipart\/form-data; boundary=/);
+    expect(post[1].disableCsrfTokenFetch).toBe(true);
+  });
+
+  it('listFolderChildNames returns every child name (folders too), for dedup', async () => {
+    opentext.deps.executeHttpRequest.mockImplementation(async (_dest, cfg) => {
+      if (cfg.method === 'POST') return { status: 200, data: { ticket: 'T' } };
+      return {
+        status: 200,
+        data: {
+          results: [
+            { data: { properties: { id: 1, name: 'invoice.pdf', type: 144 } } },
+            { data: { properties: { id: 2, name: 'a-subfolder', type: 0 } } },
+          ],
+        },
+      };
+    });
+
+    const names = await opentext.listFolderChildNames(52480);
+    expect(names).toEqual(['invoice.pdf', 'a-subfolder']);
+  });
+});
+
+describe('opentext.extractNodeId', () => {
+  const opentext = require('../srv/lib/opentext.js');
+
+  it('extracts from the nested v2 create shape', () => {
+    expect(opentext.extractNodeId({ results: { data: { properties: { id: 42 } } } })).toBe(42);
+  });
+
+  it('extracts from a shallow v1 shape and coerces string ids', () => {
+    expect(opentext.extractNodeId({ id: '7' })).toBe(7);
+  });
+
+  it('throws when no id is present', () => {
+    expect(() => opentext.extractNodeId({ results: {} })).toThrow(/could not extract node id/);
+  });
+});

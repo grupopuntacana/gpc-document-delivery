@@ -25,6 +25,8 @@
 const http = require('http');
 const https = require('https');
 
+const FormData = require('form-data');
+
 const LOG = require('@sap/cds').log('opentext');
 
 // Routed through an overridable `deps` object so unit tests can patch the
@@ -265,6 +267,80 @@ async function getNodeName(nodeId) {
   return nodeTitle(res.data) || `${nodeId}.pdf`;
 }
 
+/**
+ * Return the raw names of every child of a folder (documents AND folders), used for
+ * upload dedup. Unlike `listFolder` this does NOT filter to type-144 — a collision is a
+ * collision regardless of node type (mirrors demo/server.py building `existing_names`).
+ * @returns {Promise<string[]>}
+ */
+async function listFolderChildNames(folderId) {
+  let url = `${OTCS_NODES_PATH}/${folderId}/nodes`;
+  if (LIST_FIELDS) url += `?fields=${encodeURIComponent(LIST_FIELDS)}`;
+  const res = await withTicket((ticket) => otcsRequest(ticket, { method: 'GET', url }));
+  return flattenChildren(res.data)
+    .map((c) => c && c.name)
+    .filter((n) => typeof n === 'string' && n.length > 0);
+}
+
+/**
+ * Pull the new node id out of an OTCS create-node response, defensively. OTCS v2 usually
+ * returns `{results:{data:{properties:{id}}}}` but some endpoints nest it more shallowly.
+ * Byte-for-byte mirror of Python `_extract_node_id`.
+ * @returns {number}
+ */
+function extractNodeId(payload) {
+  const queue = [payload, payload && payload.results, payload && payload.data];
+  while (queue.length) {
+    const cur = queue.shift();
+    if (!cur || typeof cur !== 'object') continue; // eslint-disable-line no-continue
+    if (cur.id != null && (typeof cur.id === 'number' || typeof cur.id === 'string')) {
+      const n = Number(cur.id);
+      if (Number.isFinite(n)) return n;
+    }
+    ['results', 'data', 'properties'].forEach((k) => {
+      if (cur[k] != null) queue.push(cur[k]);
+    });
+  }
+  throw new Error(`could not extract node id from response: ${JSON.stringify(payload).slice(0, 300)}`);
+}
+
+/**
+ * Upload a file as a type-144 Document under `parentFolderId`. The first WRITE through the
+ * Cloud Connector tunnel (reads were proven earlier). Mirrors Python
+ * `OpenTextClient.upload_document`:
+ *   POST {OTCS}/otcs/cs.exe/api/v2/nodes  multipart/form-data
+ *     - `body` form field: JSON string {parent_id, type:144, name}
+ *     - `file` part: the bytes
+ *
+ * Uses the `form-data` package (axios serializes it with a proper streaming boundary) and
+ * rides the per-host OTCS keep-alive agent like every other OTCS call. CSRF preflight is
+ * disabled to match the proven Python flow and avoid an extra cross-host HEAD on the tunnel.
+ *
+ * ⚠️ Multipart-over-Cloud-Connector is the validated-not-assumed unknown for task 0003:
+ * confirm the boundary content-type survives the proxy on first real BTP run.
+ * @returns {Promise<number>} the new node id
+ */
+async function uploadDocument(parentFolderId, fileBuffer, name, contentType = 'application/pdf') {
+  const bodyJson = JSON.stringify({
+    parent_id: Number(parentFolderId),
+    type: NODE_TYPE_DOCUMENT,
+    name,
+  });
+  const res = await withTicket((ticket) => {
+    const form = new FormData();
+    form.append('body', bodyJson, { contentType: 'application/json' });
+    form.append('file', fileBuffer, { filename: name, contentType });
+    return otcsRequest(ticket, {
+      method: 'POST',
+      url: OTCS_NODES_PATH,
+      data: form,
+      headers: form.getHeaders(), // multipart/form-data; boundary=...
+      disableCsrfTokenFetch: true,
+    });
+  });
+  return extractNodeId(res.data);
+}
+
 const YEAR_PREFIX = /^\d{4}-\d{2}-/;
 
 /**
@@ -291,11 +367,14 @@ function status(err) {
 module.exports = {
   pingNode,
   listFolder,
+  listFolderChildNames,
+  uploadDocument,
   downloadDocument,
   getNodeName,
   categorize,
   NODE_TYPE_DOCUMENT,
   // exported for unit tests
+  extractNodeId,
   deps,
   authenticate,
   getTicket,

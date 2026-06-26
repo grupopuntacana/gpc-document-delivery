@@ -148,9 +148,17 @@ open them by clicking. Three pieces:
   Service, and streams the bytes back. *Option A:* serves the PDF directly. A later
   milestone swaps the handler body for a 302 → CloudFront signed URL without changing the
   URL contract.
+- **`IngestService.uploadDocument`** (`srv/ingest-service.{cds,js}`) — **authenticated**
+  action; the seed of the shared *ingest* group (ADR 0005). Takes `{ fileName, contentType,
+  contentBase64 }`, uploads a multipart type-144 node to OpenText over the Cloud Connector
+  (`opentext.uploadDocument`, the first **write** through the tunnel), de-duplicates the
+  filename Django-style (append an 8-hex UUID suffix on collision), and returns
+  `{ nodeId, name, token }`. Target folder from `OPENTEXT_INGEST_FOLDER_ID` (falls back to
+  `OPENTEXT_FOLDER_ID`, default `2000`) so an upload shows up in the portal listing on refresh.
 - **Vue SPA** (`app/portal/src/App.vue` + `cap.js`) — fetches `documents()`, renders the
   rows grouped (Facturas / Consumo / Otros), each with an **Open PDF** link to
-  `/invoice/{token}`.
+  `/invoice/{token}`. A drag-and-drop **upload box** posts to `IngestService.uploadDocument`
+  and refreshes the listing.
 
 `srv/lib/token.js` is a byte-for-byte port of Python `src/token_redirect.py` — verified by
 cross-interop test (a token minted by either side validates on the other). Keep them in
