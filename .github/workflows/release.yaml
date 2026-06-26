@@ -11,11 +11,11 @@ permissions:
 
 jobs:
   tests:
-     uses: grupopuntacana/gpc-document-delivery/.github/workflows/test.yaml@main
+     uses: grupopuntacana/gpc-document-delivery/.github/workflows/test.yaml@master
      secrets: inherit
   deploy-cf:
     needs: [tests]
-    uses: grupopuntacana/gpc-document-delivery/.github/workflows/cf.yaml@main
+    uses: grupopuntacana/gpc-document-delivery/.github/workflows/cf.yaml@master
     secrets: inherit
     with:
       environment: Production
