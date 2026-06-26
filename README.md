@@ -19,13 +19,14 @@ crypto:
 2. **Connectivity** via the **BTP Destination Service** — OpenText (OTDS/OTCS) is reached
    through destinations; the OTDS-ticket auth dance runs in CAP code.
 
-A `SelfTestService` (`srv/delivery-service.cds`) exposes two diagnostic actions that
+A `SelfTestService` (`srv/delivery-service.cds`) exposes diagnostic actions that
 return status only, never secret material:
 
 | Action | Proves | Returns |
 |---|---|---|
 | `POST /odata/v4/selftest/checkSecret` | Credential Store read | `{ ok, source, secretLen, keyFingerprint }` |
 | `POST /odata/v4/selftest/pingOpenText` | Destination + OTDS auth | `{ ok, status, nodeTitle, ms }` |
+| `POST /odata/v4/selftest/version` | Deployed build version | `{ version }` |
 
 ### Code map
 - `srv/lib/credstore.js` — Credential Store REST reader (Basic auth + namespace header,
@@ -208,6 +209,16 @@ npm install
 mbt build                            # builds srv + portal SPA + content deployer into one mtar
 cf deploy mta_archives/gpc-document-delivery_0.1.0.mtar
 ```
+
+**CI/CD.** Pushing a `v*` tag (e.g. `git tag v0.2.0 && git push origin v0.2.0`) deploys to
+**Production** via `.github/workflows/release.yaml`. The release first runs a `verify-ci`
+gate (`.github/actions/verify-ci`) that checks the CI run (ESLint + vitest) already passed
+on the tagged commit — it does **not** re-run tests — so the tag must point at a master
+commit where CI ran. Pushing to `master` deploys to **Staging** via `cf.yaml`. On a tag
+deploy the tag name is passed as `APP_VERSION` into the SPA build and baked into the bundle
+(shown in the portal footer); `POST /odata/v4/selftest/version` reports the backend's build
+(`APP_VERSION` env, else `package.json` — the env is not yet stamped into the deployed
+runtime, so it currently returns the `package.json` version).
 
 **Done when:** on the deployed app, `checkSecret` returns `source:"credstore"` with
 `secretLen:64`, and `pingOpenText` returns `ok:true` with node 2000's title — i.e. the

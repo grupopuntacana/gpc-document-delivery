@@ -1,0 +1,84 @@
+name: Verify CI checks passed
+description: >
+  Verifies that the named check-runs on the current commit have all concluded
+  with success. Fails the calling job if any check is missing, in progress, or
+  did not succeed. Used to gate the tag-triggered deploy on the CI run that
+  already executed on the commit being released.
+
+inputs:
+  required-checks:
+    description: >
+      Newline-separated list of required check-run names. Each name must match
+      the `name:` field of a job in the CI workflow that runs on the commit
+      being released.
+    required: true
+  service-label:
+    description: >
+      Short label for the thing being released (e.g. "deploy"). Used in log
+      output and in the not-found error hint.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Verify ${{ inputs.service-label }} CI checks
+      shell: bash
+      env:
+        # Composite actions can't reference ${{ github.* }} in input defaults,
+        # so the token is passed directly from the workflow context here.
+        GH_TOKEN: ${{ github.token }}
+        SERVICE_LABEL: ${{ inputs.service-label }}
+        REQUIRED_CHECKS_INPUT: ${{ inputs.required-checks }}
+      run: |
+        COMMIT_SHA="${{ github.sha }}"
+        REPO="${{ github.repository }}"
+
+        # Split the newline-separated input into an array, trimming blanks.
+        REQUIRED_CHECKS=()
+        while IFS= read -r line; do
+          [ -n "$line" ] && REQUIRED_CHECKS+=("$line")
+        done <<< "$REQUIRED_CHECKS_INPUT"
+
+        if [ "${#REQUIRED_CHECKS[@]}" -eq 0 ]; then
+          echo "No required checks supplied — nothing to verify."
+          exit 1
+        fi
+
+        echo "Verifying $SERVICE_LABEL CI checks for commit $COMMIT_SHA"
+        echo ""
+
+        ALL_PASSED=true
+        for CHECK_NAME in "${REQUIRED_CHECKS[@]}"; do
+          # --arg passes $CHECK_NAME as a jq variable rather than interpolating
+          # into the filter (safe against names with quotes/backslashes). -s
+          # slurps every --paginate page into one array so sort_by spans pages;
+          # we take the latest run by started_at rather than trusting API order.
+          # No matching run -> empty output (the "check not found" branch below);
+          # an in-progress run -> literal "null" (the "still in progress" branch).
+          RESULT=$(gh api --paginate "repos/$REPO/commits/$COMMIT_SHA/check-runs" \
+            | jq -rs --arg name "$CHECK_NAME" \
+                '[.[].check_runs[] | select(.name == $name)]
+                 | if length == 0 then empty
+                   else (sort_by(.started_at) | last | .conclusion) end')
+
+          if [ -z "$RESULT" ]; then
+            echo "FAIL: '$CHECK_NAME' — check not found. CI may not have run on this commit."
+            echo "  Ensure this tag points to a commit on master where the CI workflow ran."
+            ALL_PASSED=false
+          elif [ "$RESULT" != "success" ]; then
+            echo "FAIL: '$CHECK_NAME' — conclusion: $RESULT"
+            if [ "$RESULT" = "null" ]; then
+              echo "  The check is still in progress. Wait for CI to finish before tagging."
+            fi
+            ALL_PASSED=false
+          else
+            echo "OK:   '$CHECK_NAME'"
+          fi
+        done
+
+        echo ""
+        if [ "$ALL_PASSED" != "true" ]; then
+          echo "Release blocked: one or more CI checks did not pass on $COMMIT_SHA."
+          exit 1
+        fi
+        echo "All CI checks passed. Proceeding with release."

@@ -310,3 +310,20 @@ describe('opentext content-type / filename derivation', () => {
     expect(buffer[0]).toBe(0xFF);
   });
 });
+
+describe('version (build version resolver)', () => {
+  const { appVersion } = require('../srv/lib/version.js');
+
+  beforeEach(() => {
+    delete process.env.APP_VERSION;
+  });
+
+  it('returns APP_VERSION when set (the deploy/tag value)', () => {
+    process.env.APP_VERSION = 'v1.2.3';
+    expect(appVersion()).toBe('v1.2.3');
+  });
+
+  it('falls back to the package.json version when APP_VERSION is unset', () => {
+    expect(appVersion()).toBe(require('../package.json').version);
+  });
+});

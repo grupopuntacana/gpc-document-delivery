@@ -34,12 +34,22 @@ export default [
       ecmaVersion: 'latest',
       sourceType: 'module',
       parserOptions: { ecmaVersion: 'latest' },
-      globals: { ...globals.browser },
+      // __APP_VERSION__ is a build-time constant injected by Vite's `define`.
+      globals: { ...globals.browser, __APP_VERSION__: 'readonly' },
     },
     rules: {
       // ESM requires explicit file extensions on relative imports (./cap.js,
       // ./App.vue); Airbnb's no-extension rule predates native ESM.
       'import-x/extensions': 'off',
+    },
+  },
+
+  // Build/config files (vite.config.js, this file) run in Node, not the browser:
+  // give them Node globals so `process`, etc. don't trip no-undef.
+  {
+    files: ['*.config.js', '*.config.mjs', 'eslint.config.mjs'],
+    languageOptions: {
+      globals: { ...globals.node },
     },
   },
 

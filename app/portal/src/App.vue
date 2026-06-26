@@ -11,6 +11,9 @@ const dragOver = ref(false)
 const uploadMsg = ref('')
 const uploadErr = ref('')
 
+// Build-time version injected by Vite (see vite.config.js `define`).
+const appVersion = __APP_VERSION__
+
 const groups = [
   { key: 'invoice', title: 'Facturas pendientes', periodLabel: 'Documento', accent: '#1d4e89' },
   { key: 'energy', title: 'Historial de consumo', periodLabel: 'Periodo', accent: '#d98a2b' },
@@ -271,6 +274,10 @@ onMounted(() => {
         </li>
       </ul>
     </section>
+
+    <footer class="app-footer">
+      <span class="app-ver">{{ appVersion }}</span>
+    </footer>
   </main>
 </template>
 
@@ -547,6 +554,20 @@ main { max-width: 1040px; margin: 0 auto; padding: 28px 24px 64px; }
   text-align: right;
 }
 .doc-open { flex: none; }
+
+/* ---- Footer / build version ------------------------------------------- */
+.app-footer {
+  margin-top: 32px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line, rgba(0, 0, 0, 0.08));
+  text-align: center;
+}
+.app-ver {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
 
 /* ---- Responsive: stack rows so "Abrir PDF" is always reachable --------- */
 @media (max-width: 600px) {
