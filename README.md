@@ -127,10 +127,20 @@ cf delete-service-key gpc-docdelivery-credstore cli
 ## Hybrid testing (local code, live BTP services)
 
 ```bash
-cds bind -2 gpc-docdelivery-credstore,gpc-docdelivery-destination
+cds bind -2 gpc-docdelivery-credstore,gpc-docdelivery-destination,gpc-docdelivery-connectivity
 npm run watch:hybrid     # cds watch --profile hybrid
 # checkSecret.source should now be 'credstore'; pingOpenText.ok=true with the real node-2000 title
 ```
+
+Bind **all three** services — the OpenText destinations are *OnPremise* (Cloud Connector),
+so every OTDS/OTCS call tunnels through the **connectivity** service. Binding only
+`destination` gives you the destination config but not the tunnel, and listings fail with
+`No binding to a connectivity service found`. The **credstore** binding is what flips
+`checkSecret.source` to `'credstore'` (env fallback otherwise).
+
+Auth under hybrid is **mocked** (`.cdsrc.json` `[hybrid].auth`), so no IAS instance is
+needed locally — call the authenticated services as a mock user, e.g. `curl -u alice: …`.
+Production is unaffected: it uses `[production].auth: ias` from `package.json`.
 
 ## Document listing portal (Option A — direct stream)
 

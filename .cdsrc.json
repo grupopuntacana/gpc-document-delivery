@@ -2,7 +2,7 @@
   "requires": {
     "destinations": true,
     "[hybrid]": {
-      "auth": "ias"
+      "auth": "mocked"
     }
   }
 }
