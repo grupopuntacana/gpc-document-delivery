@@ -1,15 +1,14 @@
 name: Cloud Foundry
 
 on:
+  # Deploy runs only via release.yaml (on a v* tag, after the verify-ci gate) or
+  # a manual dispatch — never directly on push. This keeps every deploy gated.
   workflow_call:
     inputs:
       environment:
         default: Staging
         type: string
   workflow_dispatch:
-  push:
-    branches:
-      - master
 
 permissions:
   contents: read
