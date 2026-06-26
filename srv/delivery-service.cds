@@ -1,12 +1,13 @@
 /**
- * SelfTest service — Milestone 1 BTP spike.
+ * SelfTest service — diagnostics for the BTP plumbing the rest of the port depends on.
+ * (Originated as the Milestone 1 spike; the actions remain useful in production.)
  *
- * Two diagnostic actions that prove the BTP plumbing the rest of the port depends on:
+ * Three diagnostic actions:
  *   checkSecret   -> Credential Store retrieval works (returns lengths/fingerprints only)
  *   pingOpenText  -> Destination Service + OTDS auth works (returns node title + round-trip ms)
  *   version       -> deployed build version (APP_VERSION env, else package.json)
  *
- * Neither action returns secret material. Locked to authenticated users; in production
+ * None return secret material. Locked to authenticated users; in production
  * IAS provides identity, locally the mocked auth strategy applies.
  */
 @path: 'selftest'

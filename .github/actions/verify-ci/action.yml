@@ -49,14 +49,17 @@ runs:
 
         ALL_PASSED=true
         for CHECK_NAME in "${REQUIRED_CHECKS[@]}"; do
-          # Pipe to jq with --arg so $CHECK_NAME is passed as a jq variable
-          # rather than interpolated into the filter (safe against names with
-          # quotes/backslashes). tail -1 picks the most recent conclusion when
-          # a check has been re-run.
+          # --arg passes $CHECK_NAME as a jq variable rather than interpolating
+          # into the filter (safe against names with quotes/backslashes). -s
+          # slurps every --paginate page into one array so sort_by spans pages;
+          # we take the latest run by started_at rather than trusting API order.
+          # No matching run -> empty output (the "check not found" branch below);
+          # an in-progress run -> literal "null" (the "still in progress" branch).
           RESULT=$(gh api --paginate "repos/$REPO/commits/$COMMIT_SHA/check-runs" \
-            | jq -r --arg name "$CHECK_NAME" \
-                '.check_runs[] | select(.name == $name) | .conclusion' \
-            | tail -1)
+            | jq -rs --arg name "$CHECK_NAME" \
+                '[.[].check_runs[] | select(.name == $name)]
+                 | if length == 0 then empty
+                   else (sort_by(.started_at) | last | .conclusion) end')
 
           if [ -z "$RESULT" ]; then
             echo "FAIL: '$CHECK_NAME' — check not found. CI may not have run on this commit."

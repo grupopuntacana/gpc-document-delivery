@@ -6,21 +6,17 @@
 //   2. bundled package.json version — always present in gen/srv at runtime.
 // No git lookup: the BTP runtime has no repo. Until the build stamps APP_VERSION
 // into the deployed env, runtime reports the package.json version.
-let cached;
-
+//
+// No memoization: reading process.env is free and require() is already cached by
+// Node's module cache, so a plain resolve keeps it honest if APP_VERSION changes.
 function appVersion() {
-  if (cached) return cached;
-  if (process.env.APP_VERSION) {
-    cached = process.env.APP_VERSION;
-    return cached;
-  }
+  if (process.env.APP_VERSION) return process.env.APP_VERSION;
   try {
     // srv/lib/version.js -> ../../package.json (repo root in dev, gen/srv at deploy).
-    cached = require('../../package.json').version || 'unknown';
+    return require('../../package.json').version || 'unknown';
   } catch {
-    cached = 'unknown';
+    return 'unknown';
   }
-  return cached;
 }
 
 module.exports = { appVersion };
