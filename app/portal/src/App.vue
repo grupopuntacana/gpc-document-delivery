@@ -61,12 +61,8 @@ async function load() {
 
 async function upload(file) {
   if (!file) return
-  // The <input accept> only filters the file picker; the drop handler accepts anything, so
-  // validate the type here too before sending non-PDF bytes to OpenText.
-  if (file.type && file.type !== 'application/pdf' && !/\.pdf$/i.test(file.name)) {
-    uploadErr.value = `Solo se permiten archivos PDF (recibido: ${file.type || file.name})`
-    return
-  }
+  // Any file type is accepted (PDF, photo from the camera, etc.). The backend stores the
+  // bytes with the file's own content-type; OTCS keeps it as a generic document node.
   uploading.value = true
   uploadMsg.value = ''
   uploadErr.value = ''
@@ -157,26 +153,45 @@ onMounted(() => {
       </button>
     </div>
 
-    <label
-      class="upload-box"
-      :class="{ dragover: dragOver, busy: uploading }"
-      @dragover.prevent="dragOver = true"
-      @dragleave.prevent="dragOver = false"
-      @drop.prevent="onDrop"
-    >
-      <input
-        type="file"
-        accept="application/pdf"
-        hidden
-        :disabled="uploading"
-        @change="onPick"
+    <div class="upload-row">
+      <label
+        class="upload-box"
+        :class="{ dragover: dragOver, busy: uploading }"
+        @dragover.prevent="dragOver = true"
+        @dragleave.prevent="dragOver = false"
+        @drop.prevent="onDrop"
       >
-      <span class="upload-icon">{{ uploading ? '⏳' : '↑' }}</span>
-      <span class="upload-text">
-        <strong>{{ uploading ? 'Subiendo…' : 'Arrastra un PDF aquí' }}</strong>
-        <small v-if="!uploading">o haz clic para seleccionarlo</small>
-      </span>
-    </label>
+        <input
+          type="file"
+          hidden
+          :disabled="uploading"
+          @change="onPick"
+        >
+        <span class="upload-icon">{{ uploading ? '⏳' : '↑' }}</span>
+        <span class="upload-text">
+          <strong>{{ uploading ? 'Subiendo…' : 'Arrastra un archivo aquí' }}</strong>
+          <small v-if="!uploading">o haz clic para seleccionarlo (PDF, imagen, …)</small>
+        </span>
+      </label>
+
+      <!-- `capture="environment"` opens the rear camera on phones; on desktop it falls back
+           to a normal image picker. Separate input so it doesn't override the drag-drop one. -->
+      <label
+        class="capture-btn"
+        :class="{ busy: uploading }"
+      >
+        <input
+          type="file"
+          accept="image/*"
+          capture="environment"
+          hidden
+          :disabled="uploading"
+          @change="onPick"
+        >
+        <span class="capture-icon">📷</span>
+        <span>Tomar foto</span>
+      </label>
+    </div>
 
     <transition name="fade">
       <p
@@ -252,7 +267,7 @@ onMounted(() => {
             :href="invoiceUrl(d.token)"
             target="_blank"
             rel="noopener"
-          >Abrir PDF</a>
+          >Abrir</a>
         </li>
       </ul>
     </section>
@@ -375,12 +390,18 @@ main { max-width: 1040px; margin: 0 auto; padding: 28px 24px 64px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* ---- Upload dropzone -------------------------------------------------- */
+.upload-row {
+  display: flex;
+  align-items: stretch;
+  gap: 12px;
+  margin-bottom: 18px;
+}
 .upload-box {
+  flex: 1;
   display: flex;
   align-items: center;
   gap: 16px;
   padding: 18px 22px;
-  margin-bottom: 18px;
   border: 1.5px dashed #b9c4d8;
   border-radius: 14px;
   background:
@@ -390,6 +411,29 @@ main { max-width: 1040px; margin: 0 auto; padding: 28px 24px 64px; }
   transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
 }
 .upload-box:hover { border-color: var(--navy); box-shadow: var(--shadow-sm); }
+
+/* Camera-capture shortcut (rear camera on phones, image picker on desktop). */
+.capture-btn {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  width: 104px;
+  padding: 12px;
+  border-radius: 14px;
+  background: var(--navy);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, box-shadow 0.15s;
+  box-shadow: var(--shadow-sm);
+}
+.capture-btn:hover { background: var(--navy-700); }
+.capture-btn.busy { opacity: 0.6; cursor: progress; }
+.capture-icon { font-size: 22px; line-height: 1; }
 .upload-box.dragover { border-color: var(--amber); background: var(--amber-50); }
 .upload-box.busy { opacity: 0.7; cursor: progress; }
 .upload-icon {

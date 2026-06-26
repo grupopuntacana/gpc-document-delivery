@@ -87,13 +87,25 @@ describe('IngestService.uploadDocument', () => {
     expect(payload).toContain(`filename="${data.name}"`);
   });
 
-  it('defaults contentType to application/pdf when omitted', async () => {
+  it('defaults contentType to application/octet-stream when omitted', async () => {
     const { creates } = mockTransport({ newId: 9003 });
     await POST('/odata/v4/ingest/uploadDocument', {
       fileName: 'invoice.pdf',
       contentBase64: b64('%PDF-1.7 hello'),
     });
-    expect(creates[0].data.toString('utf8')).toContain('Content-Type: application/pdf');
+    expect(creates[0].data.toString('utf8')).toContain('Content-Type: application/octet-stream');
+  });
+
+  it('accepts a non-PDF file (e.g. a camera photo) with its own content type', async () => {
+    const { creates } = mockTransport({ newId: 9004 });
+    const { data } = await POST('/odata/v4/ingest/uploadDocument', {
+      fileName: 'photo.jpg',
+      contentType: 'image/jpeg',
+      contentBase64: b64('\xFF\xD8\xFF fake-jpeg'),
+    });
+    expect(data.nodeId).toBe(9004);
+    expect(creates[0].data.toString('utf8')).toContain('Content-Type: image/jpeg');
+    expect(creates[0].data.toString('utf8')).toContain('filename="photo.jpg"');
   });
 
   it('rejects an empty file', async () => {

@@ -237,3 +237,44 @@ describe('opentext.extractNodeId', () => {
     expect(() => opentext.extractNodeId({ results: {} })).toThrow(/could not extract node id/);
   });
 });
+
+describe('opentext content-type / filename derivation', () => {
+  const opentext = require('../srv/lib/opentext.js');
+
+  it('extensionForType maps known types and falls back gracefully', () => {
+    expect(opentext.extensionForType('application/pdf')).toBe('pdf');
+    expect(opentext.extensionForType('image/jpeg')).toBe('jpg');
+    expect(opentext.extensionForType('image/png; charset=binary')).toBe('png');
+    expect(opentext.extensionForType('image/svg+xml')).toBe('svg'); // subtype fallback
+    expect(opentext.extensionForType('')).toBe('bin'); // unknown → bin
+    expect(opentext.extensionForType(undefined)).toBe('bin');
+  });
+
+  it('downloadFileName prefers the stored name, else synthesizes from the type', () => {
+    expect(opentext.downloadFileName(2000, 'image/jpeg', 'photo.jpg')).toBe('photo.jpg');
+    expect(opentext.downloadFileName(2000, 'image/jpeg', null)).toBe('document-2000.jpg');
+    expect(opentext.downloadFileName(2000, 'application/pdf', '')).toBe('document-2000.pdf');
+    // strips characters that would break the Content-Disposition header
+    expect(opentext.downloadFileName(1, 'text/plain', 'a"\r\nb.txt')).toBe('a___b.txt');
+  });
+
+  it('downloadDocument returns the upstream filename from Content-Disposition', async () => {
+    opentext.clearTicketCache();
+    opentext.deps.getDestination = vi.fn(async () => ({ username: 'Admin', password: 'secret' }));
+    opentext.deps.executeHttpRequest = vi.fn(async (_dest, cfg) => {
+      if (cfg.method === 'POST') return { status: 200, data: { ticket: 'T' } };
+      return {
+        status: 200,
+        data: Buffer.from('\xFF\xD8\xFF jpeg'),
+        headers: {
+          'content-type': 'image/jpeg',
+          'content-disposition': 'inline; filename="invoice-photo.jpg"',
+        },
+      };
+    });
+
+    const { contentType, fileName } = await opentext.downloadDocument(7777);
+    expect(contentType).toBe('image/jpeg');
+    expect(fileName).toBe('invoice-photo.jpg');
+  });
+});

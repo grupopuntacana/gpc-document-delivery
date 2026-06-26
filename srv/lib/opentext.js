@@ -260,10 +260,74 @@ async function downloadDocument(nodeId) {
     url: `${OTCS_NODES_PATH}/${nodeId}/content`,
     responseType: 'arraybuffer',
   }));
-  const contentType = (res.headers
-      && (res.headers['content-type'] || res.headers['Content-Type']))
-    || 'application/pdf';
-  return { buffer: Buffer.from(res.data), contentType };
+  const headers = res.headers || {};
+  const contentType = headers['content-type'] || headers['Content-Type']
+    || 'application/octet-stream';
+  // OTCS usually echoes the stored filename here — the source of truth for the extension.
+  const fileName = filenameFromDisposition(
+    headers['content-disposition'] || headers['Content-Disposition'],
+  );
+  return { buffer: Buffer.from(res.data), contentType, fileName };
+}
+
+/**
+ * Strip characters that would break a multipart `filename="…"` part or a Content-Disposition
+ * header (CR/LF/quote/backslash) and bound the length. Shared by upload (multipart framing)
+ * and download (response header) so the rule lives in one place.
+ */
+function sanitizeFileName(name) {
+  return String(name).replace(/[\r\n"\\]/g, '_').slice(0, 255);
+}
+
+// MIME → extension, but ONLY for types whose extension differs from the MIME subtype — every
+// other type (image/png, application/zip, …) is handled by the subtype fallback in
+// extensionForType. Used solely to synthesize a download name when OTCS supplies none.
+const EXT_BY_TYPE = {
+  'image/jpeg': 'jpg',
+  'text/plain': 'txt',
+  'application/msword': 'doc',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+  'application/vnd.ms-excel': 'xls',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+};
+
+/** Best-effort extension for a content-type. Falls back to the subtype, then `bin`. */
+function extensionForType(contentType) {
+  const base = String(contentType || '').split(';')[0].trim().toLowerCase();
+  if (EXT_BY_TYPE[base]) return EXT_BY_TYPE[base];
+  const slash = base.indexOf('/');
+  if (slash > 0) {
+    // e.g. `image/svg+xml` → `svg`; reject anything that isn't a clean token.
+    const sub = base.slice(slash + 1).split('+')[0];
+    if (/^[a-z0-9.-]{1,12}$/.test(sub)) return sub;
+  }
+  return 'bin';
+}
+
+/** Parse `filename`/`filename*` out of a Content-Disposition header; null if absent. */
+function filenameFromDisposition(disposition) {
+  if (!disposition) return null;
+  // RFC 5987 `filename*=UTF-8''name.ext` takes precedence over plain `filename="name.ext"`.
+  const star = /filename\*\s*=\s*[^']*''([^;]+)/i.exec(disposition);
+  if (star) {
+    try {
+      return decodeURIComponent(star[1].trim());
+    } catch {
+      return star[1].trim();
+    }
+  }
+  const plain = /filename\s*=\s*"?([^";]+)"?/i.exec(disposition);
+  return plain ? plain[1].trim() : null;
+}
+
+/**
+ * The filename to serve a downloaded node under. Prefers the name OTCS stored (which already
+ * carries the right extension), otherwise synthesizes `document-<id>.<ext>` from the
+ * content-type. Always stripped of characters that could break the Content-Disposition header.
+ */
+function downloadFileName(nodeId, contentType, upstreamName) {
+  const raw = upstreamName || `document-${nodeId}.${extensionForType(contentType)}`;
+  return sanitizeFileName(raw);
 }
 
 /**
@@ -335,7 +399,7 @@ async function uploadDocument(parentFolderId, fileBuffer, name, contentType = 'a
   // Defensive: the `form-data` package does NOT escape CR/LF/quote/backslash in `filename=`,
   // so a crafted name could break the multipart framing. Strip those before they hit the
   // wire (callers should sanitize too; this keeps the library safe regardless).
-  const safeName = String(name).replace(/[\r\n"\\]/g, '_').slice(0, 255);
+  const safeName = sanitizeFileName(name);
   const bodyJson = JSON.stringify({
     parent_id: Number(parentFolderId),
     type: NODE_TYPE_DOCUMENT,
@@ -415,6 +479,9 @@ module.exports = {
   listFolderChildNames,
   uploadDocument,
   downloadDocument,
+  downloadFileName,
+  extensionForType,
+  sanitizeFileName,
   getNodeName,
   categorize,
   describeError,
