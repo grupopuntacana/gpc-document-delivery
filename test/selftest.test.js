@@ -189,9 +189,18 @@ describe('opentext.uploadDocument', () => {
     );
     expect(post).toBeTruthy();
     expect(post[1].headers.OTDSTicket).toBe('TICKET-1');
-    // form-data sets a multipart boundary content-type and CSRF preflight is disabled
+    // form-data sets a multipart boundary content-type; body is a materialized Buffer
     expect(String(post[1].headers['content-type'])).toMatch(/^multipart\/form-data; boundary=/);
-    expect(post[1].disableCsrfTokenFetch).toBe(true);
+    expect(Buffer.isBuffer(post[1].data)).toBe(true);
+    // the `body` form field carries the non-empty JSON string OTCS requires
+    // (guards the "Body must be a non-empty String" 400 regression)
+    const payload = post[1].data.toString('utf8');
+    expect(payload).toContain('name="body"');
+    expect(payload).toContain('"type":144');
+    expect(payload).toContain('"name":"invoice.pdf"');
+    expect(payload).toContain('filename="invoice.pdf"');
+    // CSRF preflight is disabled via the SDK's third options arg, not a config field
+    expect(post[2]).toMatchObject({ fetchCsrfToken: false });
   });
 
   it('listFolderChildNames returns every child name (folders too), for dedup', async () => {

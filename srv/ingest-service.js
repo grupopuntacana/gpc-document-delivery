@@ -57,8 +57,10 @@ module.exports = class IngestService extends cds.ApplicationService {
         LOG.info(`uploaded "${fileName}" as "${name}" -> node ${nodeId} (${buffer.length} bytes)`);
         return { nodeId, name, token: tok };
       } catch (err) {
-        LOG.error('upload failed:', err.message);
-        return req.reject(502, `OpenText upload failed: ${err.message}`);
+        const reason = opentext.describeError(err);
+        LOG.error('upload failed:', reason);
+        LOG.error(err.stack || err);
+        return req.reject(502, `OpenText upload failed: ${reason}`);
       }
     });
 

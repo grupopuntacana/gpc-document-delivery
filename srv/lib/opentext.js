@@ -85,12 +85,18 @@ const LIST_FIELDS = process.env.OTCS_LIST_FIELDS != null
 const DEST_OTDS = process.env.OPENTEXT_OTDS_DESTINATION || 'OpenText_OTDS';
 const DEST_OTCS = process.env.OPENTEXT_OTCS_DESTINATION || 'OpenText_OTCS';
 
+// SAP Cloud SDK CSRF control lives in the THIRD arg of executeHttpRequest
+// (`options.fetchCsrfToken`, default true) — NOT in the request config. A
+// `disableCsrfTokenFetch` field on the config is silently ignored. We never want CSRF on
+// the OpenText calls: OTDS auth is a JSON body (no form CSRF) and OTCS create-node mirrors
+// the Python flow which used no CSRF. Leaving it on fires a useless preflight per call and,
+// worse, breaks multipart uploads (the preflight interferes with the body). So: turn it off.
+const NO_CSRF = { fetchCsrfToken: false };
+
 /** Authenticate against OTDS and return the OTDS ticket. */
 async function authenticate() {
   const dest = await deps.getDestination({ destinationName: DEST_OTDS });
   if (!dest) throw new Error(`Destination "${DEST_OTDS}" not found`);
-  // The OTDS auth endpoint doesn't support CSRF preflight (HEAD/OPTIONS) — disable the
-  // SAP Cloud SDK's CSRF middleware for this call (it's a JSON-body auth, not form-based).
   const res = await deps.executeHttpRequest(
     { destinationName: DEST_OTDS },
     {
@@ -98,9 +104,9 @@ async function authenticate() {
       url: OTDS_AUTH_PATH,
       headers: { 'Content-Type': 'application/json' },
       data: { user_name: dest.username, password: dest.password },
-      disableCsrfTokenFetch: true,
       ...otdsAgents,
     },
+    NO_CSRF,
   );
   const ticket = res.data && res.data.ticket;
   if (!ticket) throw new Error('OTDS authentication returned no ticket');
@@ -139,11 +145,15 @@ function clearTicketCache() {
   _ticketExpires = 0;
 }
 
-/** Issue an OTCS request with the OTDSTicket header. `cfg` is an http-client request config. */
-function otcsRequest(ticket, cfg) {
+/**
+ * Issue an OTCS request with the OTDSTicket header. `cfg` is an http-client request config;
+ * `options` is the SAP Cloud SDK's third arg (e.g. `{fetchCsrfToken:false}` for writes).
+ */
+function otcsRequest(ticket, cfg, options) {
   return deps.executeHttpRequest(
     { destinationName: DEST_OTCS },
     { ...cfg, headers: { OTDSTicket: ticket, ...(cfg.headers || {}) }, ...otcsAgents },
+    options,
   );
 }
 
@@ -312,12 +322,13 @@ function extractNodeId(payload) {
  *     - `body` form field: JSON string {parent_id, type:144, name}
  *     - `file` part: the bytes
  *
- * Uses the `form-data` package (axios serializes it with a proper streaming boundary) and
- * rides the per-host OTCS keep-alive agent like every other OTCS call. CSRF preflight is
- * disabled to match the proven Python flow and avoid an extra cross-host HEAD on the tunnel.
- *
- * ⚠️ Multipart-over-Cloud-Connector is the validated-not-assumed unknown for task 0003:
- * confirm the boundary content-type survives the proxy on first real BTP run.
+ * Built with the `form-data` package and sent as a fully-materialized **Buffer**
+ * (`getBuffer()`), not a stream: a Buffer serializes deterministically through the SDK and
+ * gives a real `Content-Length`, which the Cloud Connector tunnel prefers over chunked. The
+ * `body` field is a plain text part (matching Python `data={"body": ...}`) — OTCS rejects an
+ * empty/non-string `body` with 400 "Body must be a non-empty String". CSRF is disabled
+ * (`NO_CSRF`); leaving it on fired a preflight that consumed the body and broke the upload.
+ * Rides the per-host OTCS keep-alive agent like every other OTCS call.
  * @returns {Promise<number>} the new node id
  */
 async function uploadDocument(parentFolderId, fileBuffer, name, contentType = 'application/pdf') {
@@ -328,15 +339,18 @@ async function uploadDocument(parentFolderId, fileBuffer, name, contentType = 'a
   });
   const res = await withTicket((ticket) => {
     const form = new FormData();
-    form.append('body', bodyJson, { contentType: 'application/json' });
+    form.append('body', bodyJson); // plain text field, like Python data={"body": ...}
     form.append('file', fileBuffer, { filename: name, contentType });
-    return otcsRequest(ticket, {
-      method: 'POST',
-      url: OTCS_NODES_PATH,
-      data: form,
-      headers: form.getHeaders(), // multipart/form-data; boundary=...
-      disableCsrfTokenFetch: true,
-    });
+    return otcsRequest(
+      ticket,
+      {
+        method: 'POST',
+        url: OTCS_NODES_PATH,
+        data: form.getBuffer(), // materialized multipart payload (sets Content-Length)
+        headers: form.getHeaders(), // multipart/form-data; boundary=...
+      },
+      NO_CSRF,
+    );
   });
   return extractNodeId(res.data);
 }
@@ -364,6 +378,33 @@ function status(err) {
   return (err && err.response && err.response.status) || (err && err.status) || 0;
 }
 
+/**
+ * Build a human-readable reason from a SAP Cloud SDK / axios error. These errors often have
+ * an EMPTY `.message` while the real cause sits in `response.data`, `cause`, `rootCause`, or
+ * an `errno`/`code` (ETIMEDOUT, ECONNREFUSED, 403 proxy denial …). Used so a failed listing
+ * surfaces something actionable instead of "OpenText listing failed:" with a blank tail.
+ */
+function describeError(err) {
+  if (!err) return 'unknown error';
+  const parts = [];
+  const st = status(err);
+  if (st) parts.push(`HTTP ${st}`);
+  if (err.code) parts.push(`code=${err.code}`);
+  if (err.errno && err.errno !== err.code) parts.push(`errno=${err.errno}`);
+  const body = err.response && err.response.data;
+  if (body) {
+    const text = typeof body === 'string' ? body : JSON.stringify(body);
+    if (text && text !== '{}') parts.push(`body=${text.slice(0, 300)}`);
+  }
+  if (err.message) parts.push(err.message);
+  // SAP Cloud SDK nests the underlying axios/network failure here.
+  const root = err.rootCause || err.cause;
+  if (root && (root.message || root.code)) {
+    parts.push(`cause: ${root.code ? `${root.code} ` : ''}${root.message || ''}`.trim());
+  }
+  return parts.filter(Boolean).join(' | ') || `${err}`;
+}
+
 module.exports = {
   pingNode,
   listFolder,
@@ -372,6 +413,7 @@ module.exports = {
   downloadDocument,
   getNodeName,
   categorize,
+  describeError,
   NODE_TYPE_DOCUMENT,
   // exported for unit tests
   extractNodeId,
