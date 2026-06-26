@@ -102,9 +102,16 @@ async function objectExists(key) {
 }
 
 /**
- * Ensure the node's PDF is in the S3 cache, then return a CloudFront signed URL for it.
+ * Ensure the node's bytes are in the S3 cache, then return a CloudFront signed URL for it.
  * Mirrors Python `CDNPublisher.publish`: HeadObject -> on miss, download from OpenText
  * and PutObject with cache-only metadata -> sign.
+ *
+ * Any file type is supported (not just PDF). The real content-type and the stored filename
+ * are baked onto the S3 object as `ContentType` / `ContentDisposition`; CloudFront forwards
+ * both as response headers, so the browser renders the file inline and "Save As" gets the
+ * right name — for this miss and every later cache hit (the object already carries them).
+ * The `.pdf` suffix in the S3 key (`cloudfront.s3Key`) is now just a legacy cache-key
+ * convention, not a content claim — the headers, not the key, drive what the browser sees.
  * @param {number} nodeId
  * @returns {Promise<string>} a short-lived CloudFront signed URL (cache hit on next call)
  */
@@ -116,16 +123,22 @@ async function publish(nodeId) {
     LOG.info(`cache miss for node=${nodeId} — fetching from OpenText`);
     const { PutObjectCommand } = deps.loadS3Sdk();
     const s3 = await getS3();
-    const [{ buffer }, originalName] = await Promise.all([
+    const [{ buffer, contentType, fileName }, originalName] = await Promise.all([
       opentext.downloadDocument(nodeId),
       opentext.getNodeName(nodeId),
     ]);
+    // The OTCS node name is the authoritative filename; recover the type from it if the
+    // download reported a generic octet-stream (same logic the stream path uses).
+    const displayName = originalName || fileName;
+    const safeName = opentext.downloadFileName(nodeId, contentType, displayName);
+    const type = opentext.resolveContentType(contentType, displayName);
     await s3.send(
       new PutObjectCommand({
         Bucket: s3Bucket(),
         Key: key,
         Body: buffer,
-        ContentType: 'application/pdf',
+        ContentType: type,
+        ContentDisposition: `inline; filename="${safeName}"`,
         Metadata: {
           'opentext-node-id': String(nodeId),
           'original-filename': originalName,
@@ -134,7 +147,7 @@ async function publish(nodeId) {
         },
       }),
     );
-    LOG.info(`cached node=${nodeId} bytes=${buffer.length} key=${key}`);
+    LOG.info(`cached node=${nodeId} bytes=${buffer.length} type=${type} key=${key}`);
   }
   return cloudfront.signedUrlForNode(nodeId);
 }

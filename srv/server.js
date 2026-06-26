@@ -40,14 +40,11 @@ cds.on('bootstrap', (app) => {
     }
     try {
       if (DELIVERY_MODE === 'cdn') {
-        // Option B: ensure the PDF is in the S3 cache and 302 to a CloudFront signed URL.
+        // Option B: ensure the file is in the S3 cache and 302 to a CloudFront signed URL.
         // The browser follows the redirect to the CDN edge, so repeat fetches never touch
-        // OpenText. The URL contract (`/invoice/:token`) is unchanged.
-        //
-        // ⚠️ Unlike the stream path below, Option B is still PDF-only: cdn.js caches under a
-        // `.pdf` S3 key with ContentType application/pdf. A non-PDF upload (photo, office doc)
-        // would be mis-served in cdn mode. Generalizing it means threading downloadDocument's
-        // contentType/fileName into PutObject + the signed URL — deferred until Option B ships.
+        // OpenText. The URL contract (`/invoice/:token`) is unchanged. Like the stream path,
+        // any file type is served correctly — cdn.publish bakes the real content-type and
+        // filename onto the cached object so CloudFront returns them as response headers.
         const url = await cdn.publish(payload.nodeId);
         const ms = Math.round(Number(process.hrtime.bigint() - t0) / 1e6);
         LOG.info(`redirect node=${payload.nodeId} mode=cdn in ${ms} ms`);
