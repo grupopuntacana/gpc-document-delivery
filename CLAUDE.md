@@ -86,5 +86,6 @@ Request paths:
 - Per-phase timing logs are at `debug` level, off by default. Enable with
   `CDS_LOG_LEVELS='{"portal":"debug","opentext":"debug"}'` (see README "Debugging with logs").
 - `mta.yaml` provisions service instances; their *contents* (destinations, Credential Store
-  entries) are configured separately. Credential Store is commented out while validating —
-  re-enabling it needs no code change. Write entries via `scripts/credstore-put.js`.
+  entries) are configured separately. During validation the env fallback in `credstore.js`
+  supplies secrets; `credstore.js` auto-detects the Credential Store binding, so switching to
+  it needs no code change (task `0001`). Write entries via `scripts/credstore-put.js`.

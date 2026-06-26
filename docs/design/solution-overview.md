@@ -89,7 +89,8 @@ tab.
 GET /invoice/{token}            (live, anonymous — srv/server.js)
   302 -> short-lived CloudFront signed URL
   403  if token revoked / expired / signature bad
-  410  if the OpenText node was deleted
+  502  if the OpenText fetch fails (current behavior in srv/server.js;
+       a 410-for-deleted-node refinement is a TODO)
 
 mint                            today: PortalService.documents() (authenticated portal)
                                 planned service-to-service mint: ADR 0005 ingest/deliver API
