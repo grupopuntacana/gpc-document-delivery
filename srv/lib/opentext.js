@@ -88,6 +88,8 @@ const DEST_OTCS = process.env.OPENTEXT_OTCS_DESTINATION || 'OpenText_OTCS';
 async function authenticate() {
   const dest = await deps.getDestination({ destinationName: DEST_OTDS });
   if (!dest) throw new Error(`Destination "${DEST_OTDS}" not found`);
+  // The OTDS auth endpoint doesn't support CSRF preflight (HEAD/OPTIONS) — disable the
+  // SAP Cloud SDK's CSRF middleware for this call (it's a JSON-body auth, not form-based).
   const res = await deps.executeHttpRequest(
     { destinationName: DEST_OTDS },
     {
@@ -95,6 +97,7 @@ async function authenticate() {
       url: OTDS_AUTH_PATH,
       headers: { 'Content-Type': 'application/json' },
       data: { user_name: dest.username, password: dest.password },
+      disableCsrfTokenFetch: true,
       ...otdsAgents,
     }
   );
