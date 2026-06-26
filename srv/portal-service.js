@@ -14,8 +14,28 @@ const FOLDER_ID = Number(process.env.OPENTEXT_FOLDER_ID || 2000);
 // Listing tokens are short-lived (demo used 7 days).
 const TOKEN_TTL_DAYS = Number(process.env.PORTAL_TOKEN_TTL_DAYS || 7);
 
+/**
+ * Shape req.user into the chip the SPA renders. IAS claims usually land in `req.user.attr`
+ * (via @sap/xssec), but some CAP setups expose them at the top level — so we read both.
+ * `name` falls back to the user id; `email` falls back to null (the SPA hides the line when
+ * absent) rather than echoing the username, which under mocked auth looked like alice/alice.
+ */
+function toUserView(u) {
+  const a = (u && u.attr) || {};
+  const given = a.given_name || u.given_name;
+  const family = a.family_name || u.family_name;
+  return {
+    id: u.id,
+    name: [given, family].filter(Boolean).join(' ') || u.id,
+    email: a.email || u.email || null,
+  };
+}
+
 module.exports = class PortalService extends cds.ApplicationService {
   init() {
+    // Surface the authenticated identity for the SPA header (see toUserView).
+    this.on('whoami', (req) => toUserView(req.user));
+
     this.on('documents', async (req) => {
       try {
         // Per-phase timing so the logs reveal where a listing spends its time:
@@ -55,3 +75,6 @@ module.exports = class PortalService extends cds.ApplicationService {
     return super.init();
   }
 };
+
+// Exposed for unit tests (the present-claims path can't be exercised through mocked auth).
+module.exports.toUserView = toUserView;

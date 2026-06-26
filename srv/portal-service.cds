@@ -22,4 +22,13 @@ type DocRow {
 service PortalService {
   @requires: 'authenticated-user'
   function documents() returns array of DocRow;
+
+  // Current logged-in user, for the SPA header. Resolved from the IAS token (req.user);
+  // under mocked hybrid auth it returns the mock user (e.g. 'alice').
+  @requires: 'authenticated-user'
+  function whoami() returns {
+    id    : String;
+    name  : String;
+    email : String;
+  };
 }
