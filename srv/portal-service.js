@@ -45,8 +45,10 @@ module.exports = class PortalService extends cds.ApplicationService {
         );
         return rows;
       } catch (err) {
-        LOG.error('documents listing failed:', err.message);
-        return req.reject(502, `OpenText listing failed: ${err.message}`);
+        const reason = opentext.describeError(err);
+        LOG.error('documents listing failed:', reason);
+        LOG.error(err.stack || err);
+        return req.reject(502, `OpenText listing failed: ${reason}`);
       }
     });
 

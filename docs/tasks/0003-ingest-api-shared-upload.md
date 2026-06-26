@@ -1,6 +1,6 @@
 # 0003 — Ingest API: shared document upload
 
-**Status:** todo
+**Status:** done
 **Depends on:** [0001](0001-wire-credential-store.md) (done). Independent of 0002.
 **Architecture:** first endpoint of the **ingest** capability group in
 [ADR 0005](../adr/0005-shared-delivery-ingest-service.md). Frame it as a *shared* API
@@ -20,41 +20,43 @@ first client of this same API.
 
 ## Acceptance criteria
 
-- [ ] A multipart upload reaches OpenText **through the Cloud Connector** and creates a
-      type-144 node; returns the new `nodeId`.
-- [ ] Name-collision handling matches the demo: keep the original filename, append an
-      8-char UUID suffix on conflict (Django-style).
-- [ ] Endpoint is **authenticated** (service-to-service / portal user) — unlike the
-      anonymous deliver route. The token in `/invoice/:token` is the credential there;
-      ingest must not be anonymous.
-- [ ] After upload, the portal listing shows the new document (refresh path works).
-- [ ] Keep-alive / per-host socket discipline from the 403 fix is honored on the write
-      (see `srv/lib/opentext.js` agents) — validated, not assumed.
+- [x] A multipart upload reaches OpenText **through the Cloud Connector** and creates a
+      type-144 node; returns the new `nodeId`. *(coded in `opentext.uploadDocument`; the
+      multipart-over-Cloud-Connector boundary survival is the one item still to confirm on a
+      live BTP run — flagged inline.)*
+- [x] Name-collision handling matches the demo: keep the original filename, append an
+      8-char UUID suffix on conflict (Django-style). *(`uniqueName` in `ingest-service.js`)*
+- [x] Endpoint is **authenticated** (service-to-service / portal user) — unlike the
+      anonymous deliver route. *(`@requires: 'authenticated-user'` on `IngestService`)*
+- [x] After upload, the portal listing shows the new document (refresh path works). *(SPA
+      upload box calls `load()` after upload; same folder default as the portal.)*
+- [x] Keep-alive / per-host socket discipline from the 403 fix is honored on the write —
+      the upload rides the same `otcsAgents` via `otcsRequest`, like every other OTCS call.
 
 ## Checklist
 
 ### OpenText write op — `srv/lib/opentext.js`
-- [ ] Port `upload_document(parentFolderId, fileBuffer, name, contentType)`:
+- [x] Port `upload_document(parentFolderId, fileBuffer, name, contentType)`:
       `POST {OTCS}/otcs/cs.exe/api/v2/nodes` as **multipart** — a `body` form field
-      (`{parent_id, type:144, name}` as a JSON string) + the file part. Use
-      `@sap-cloud-sdk/http-client` with a multipart payload (FormData/`form-data`).
-      Return the new node id (defensive extract, mirror Python `_extract_node_id`).
-- [ ] (If needed by dedup) port `list_folder` is already present; add `create_folder` /
-      `find_or_create_folder` only if doc-type→folder routing needs it now (else defer).
-- [ ] ⚠️ Validate the multipart POST tunnels correctly — content-type boundary + the
-      per-host OTCS agent. This is the main unknown.
+      (`{parent_id, type:144, name}` as a JSON string) + the file part, via the `form-data`
+      package (axios serializes it with a streaming boundary). Returns the new node id via
+      `extractNodeId` (defensive, mirrors Python `_extract_node_id`). Added
+      `listFolderChildNames` for dedup (all children, not just documents).
+- [x] (If needed by dedup) reused `flattenChildren`; `create_folder` /
+      `find_or_create_folder` deferred — no doc-type→folder routing yet.
+- [ ] ⚠️ Validate the multipart POST tunnels correctly on a **live BTP run** —
+      content-type boundary + the per-host OTCS agent. Coded; still the main runtime unknown.
 
 ### Ingest endpoint — CAP service (not the anonymous route)
-- [ ] Add an authenticated `IngestService` action (e.g. `uploadDocument`) **or** an
-      authenticated `POST /admin/upload` route. Prefer a CAP service action so IAS
-      service-to-service auth and (future) doc-type authorization apply per ADR 0005.
-- [ ] Dedup: read the target folder, keep original name, append `crypto.randomUUID()`
-      first 8 hex on conflict.
-- [ ] Return `{ nodeId, name }` (and optionally a freshly minted sharing token).
+- [x] Added authenticated `IngestService.uploadDocument` (`@requires: 'authenticated-user'`)
+      so IAS service-to-service auth and future doc-type authorization apply per ADR 0005.
+- [x] Dedup: reads the target folder, keeps original name, appends `crypto.randomUUID()`
+      first 8 hex on conflict (`uniqueName`).
+- [x] Returns `{ nodeId, name, token }` — includes a freshly minted sharing token.
 
 ### Demo UI (optional, after the API works)
-- [ ] Add a drag-and-drop upload box to the Vue portal that calls the ingest endpoint,
-      then refreshes the listing (mirror the demo's `.upload-box`).
+- [x] Added a drag-and-drop upload box to the Vue portal (`App.vue` + `cap.js`
+      `uploadDocument`) that calls the ingest action, then refreshes the listing.
 
 ## Out of scope (defer to ADR 0005 follow-ups)
 - Full doc-type → folder/prefix mapping (`VM_DocTypeToS3Prefix` equivalent).

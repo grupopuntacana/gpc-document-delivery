@@ -1,10 +1,14 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { listDocuments, invoiceUrl } from './cap.js'
+import { listDocuments, invoiceUrl, uploadDocument } from './cap.js'
 
 const docs = ref([])
 const loading = ref(true)
 const error = ref('')
+const uploading = ref(false)
+const dragOver = ref(false)
+const uploadMsg = ref('')
+const uploadErr = ref('')
 
 const groups = [
   { key: 'invoice', title: 'Facturas pendientes', periodLabel: 'Documento' },
@@ -35,6 +39,38 @@ async function load() {
   }
 }
 
+async function upload(file) {
+  if (!file) return
+  // The <input accept> only filters the file picker; the drop handler accepts anything, so
+  // validate the type here too before sending non-PDF bytes to OpenText.
+  if (file.type && file.type !== 'application/pdf' && !/\.pdf$/i.test(file.name)) {
+    uploadErr.value = `Solo se permiten archivos PDF (recibido: ${file.type || file.name})`
+    return
+  }
+  uploading.value = true
+  uploadMsg.value = ''
+  uploadErr.value = ''
+  try {
+    const { nodeId, name } = await uploadDocument(file)
+    uploadMsg.value = `Subido: ${name} (node ${nodeId})`
+    await load() // refresh the listing so the new document appears
+  } catch (e) {
+    uploadErr.value = e.message
+  } finally {
+    uploading.value = false
+  }
+}
+
+function onDrop(e) {
+  dragOver.value = false
+  upload(e.dataTransfer?.files?.[0])
+}
+
+function onPick(e) {
+  upload(e.target.files?.[0])
+  e.target.value = '' // allow re-uploading the same file
+}
+
 onMounted(load)
 </script>
 
@@ -56,6 +92,38 @@ onMounted(load)
         {{ loading ? 'Cargando…' : 'Refrescar' }}
       </button>
     </div>
+
+    <label
+      class="upload-box"
+      :class="{ dragover: dragOver, busy: uploading }"
+      @dragover.prevent="dragOver = true"
+      @dragleave.prevent="dragOver = false"
+      @drop.prevent="onDrop"
+    >
+      <input
+        type="file"
+        accept="application/pdf"
+        hidden
+        :disabled="uploading"
+        @change="onPick"
+      >
+      <span v-if="uploading">Subiendo…</span>
+      <span v-else>Arrastra un PDF aquí o haz clic para subirlo</span>
+    </label>
+
+    <p
+      v-if="uploadMsg"
+      class="notice"
+    >
+      {{ uploadMsg }}
+    </p>
+
+    <p
+      v-if="uploadErr"
+      class="error"
+    >
+      No se pudo subir el documento: {{ uploadErr }}
+    </p>
 
     <p
       v-if="error"
@@ -126,6 +194,13 @@ header .sub { margin-top: 4px; font-size: 13px; opacity: 0.75; }
 main { max-width: 1000px; margin: 24px auto; padding: 0 24px; }
 .toolbar { display: flex; justify-content: flex-end; margin-bottom: 16px; }
 .error { background: #fee2e2; color: #991b1b; padding: 12px 16px; border-radius: 8px; }
+.notice { background: #dcfce7; color: #166534; padding: 12px 16px; border-radius: 8px; }
+.upload-box { display: flex; align-items: center; justify-content: center; min-height: 72px;
+  margin-bottom: 16px; padding: 16px; border: 2px dashed #c2c9d6; border-radius: 10px;
+  background: #fafbfc; color: #5a6478; font-size: 14px; cursor: pointer; transition: all 0.15s; }
+.upload-box:hover { border-color: #0b2545; color: #0b2545; }
+.upload-box.dragover { border-color: #0b2545; background: #eef3fb; color: #0b2545; }
+.upload-box.busy { opacity: 0.6; cursor: progress; }
 section { background: #fff; border: 1px solid #e3e6ec; border-radius: 10px; margin-bottom: 24px; overflow: hidden; }
 section h2 { margin: 0; padding: 14px 20px; font-size: 13px; font-weight: 600; text-transform: uppercase;
   letter-spacing: 0.6px; color: #5a6478; border-bottom: 1px solid #eef0f4; background: #fafbfc; }

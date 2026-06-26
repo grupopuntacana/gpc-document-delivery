@@ -56,8 +56,9 @@ cds.on('bootstrap', (app) => {
       res.setHeader('Content-Disposition', `inline; filename="document-${payload.nodeId}.pdf"`);
       return res.send(buffer);
     } catch (err) {
-      LOG.error(`fetch failed node=${payload.nodeId} mode=${DELIVERY_MODE}: ${err.message}`);
-      return res.status(502).send(`fetch failed: ${err.message}`);
+      const reason = opentext.describeError(err);
+      LOG.error(`fetch failed node=${payload.nodeId} mode=${DELIVERY_MODE}: ${reason}`);
+      return res.status(502).send(`fetch failed: ${reason}`);
     }
   });
 });
