@@ -258,23 +258,51 @@ describe('opentext content-type / filename derivation', () => {
     expect(opentext.downloadFileName(1, 'text/plain', 'a"\r\nb.txt')).toBe('a___b.txt');
   });
 
-  it('downloadDocument returns the upstream filename from Content-Disposition', async () => {
+  it('filenameFromDisposition parses quoted, unquoted and RFC 5987 forms', () => {
+    const f = opentext.filenameFromDisposition;
+    expect(f(null)).toBeNull();
+    expect(f('inline; filename="photo.jpg"')).toBe('photo.jpg');
+    expect(f('attachment; filename=photo.jpg')).toBe('photo.jpg');
+    // quoted value containing a semicolon must survive
+    expect(f('attachment; filename="a;b.txt"')).toBe('a;b.txt');
+    // RFC 5987 with empty and with language tag, percent-decoded
+    expect(f("attachment; filename*=UTF-8''inv%20oice.pdf")).toBe('inv oice.pdf');
+    expect(f("attachment; filename*=UTF-8'en'r%C3%A9sum%C3%A9.pdf")).toBe('résumé.pdf');
+  });
+
+  it('resolveContentType recovers a renderable type when OTCS reports a generic one', () => {
+    const r = opentext.resolveContentType;
+    // trusts a specific upstream type (preserving any charset suffix)
+    expect(r('image/png', 'x.png')).toBe('image/png');
+    expect(r('text/plain; charset=utf-8', 'x.txt')).toBe('text/plain; charset=utf-8');
+    // recovers from the extension when upstream is generic/missing
+    expect(r('application/octet-stream', 'photo.jpg')).toBe('image/jpeg');
+    expect(r('', 'scan.PDF')).toBe('application/pdf');
+    expect(r(undefined, 'note.heic')).toBe('image/heic');
+    // unknown extension stays generic
+    expect(r('application/octet-stream', 'archive.xyz')).toBe('application/octet-stream');
+    expect(r(null, 'noext')).toBe('application/octet-stream');
+  });
+
+  it('downloadDocument returns the filename and recovers content-type from a generic one', async () => {
     opentext.clearTicketCache();
     opentext.deps.getDestination = vi.fn(async () => ({ username: 'Admin', password: 'secret' }));
     opentext.deps.executeHttpRequest = vi.fn(async (_dest, cfg) => {
       if (cfg.method === 'POST') return { status: 200, data: { ticket: 'T' } };
       return {
         status: 200,
-        data: Buffer.from('\xFF\xD8\xFF jpeg'),
+        data: Buffer.from([0xFF, 0xD8, 0xFF, 0xE0]), // real JPEG signature
+        // OTCS reports a generic type but names the file — the bug behind "Failed to load PDF"
         headers: {
-          'content-type': 'image/jpeg',
+          'content-type': 'application/octet-stream',
           'content-disposition': 'inline; filename="invoice-photo.jpg"',
         },
       };
     });
 
-    const { contentType, fileName } = await opentext.downloadDocument(7777);
-    expect(contentType).toBe('image/jpeg');
+    const { contentType, fileName, buffer } = await opentext.downloadDocument(7777);
+    expect(contentType).toBe('image/jpeg'); // recovered, not octet-stream → renders inline
     expect(fileName).toBe('invoice-photo.jpg');
+    expect(buffer[0]).toBe(0xFF);
   });
 });

@@ -170,7 +170,7 @@ onMounted(() => {
         <span class="upload-icon">{{ uploading ? '⏳' : '↑' }}</span>
         <span class="upload-text">
           <strong>{{ uploading ? 'Subiendo…' : 'Arrastra un archivo aquí' }}</strong>
-          <small v-if="!uploading">o haz clic para seleccionarlo (PDF, imagen, …)</small>
+          <small v-if="!uploading">o haz clic para seleccionarlo (PDF, imagen, … · máx 20 MB)</small>
         </span>
       </label>
 

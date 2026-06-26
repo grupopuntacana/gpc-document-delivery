@@ -252,7 +252,7 @@ async function listFolder(folderId) {
 
 /**
  * Download a document's bytes from OpenText.
- * @returns {Promise<{buffer:Buffer,contentType:string}>}
+ * @returns {Promise<{buffer:Buffer,contentType:string,fileName:(string|null)}>}
  */
 async function downloadDocument(nodeId) {
   const res = await withTicket((ticket) => otcsRequest(ticket, {
@@ -260,20 +260,22 @@ async function downloadDocument(nodeId) {
     url: `${OTCS_NODES_PATH}/${nodeId}/content`,
     responseType: 'arraybuffer',
   }));
+  // The SAP Cloud SDK (axios underneath) lowercases response header names.
   const headers = res.headers || {};
-  const contentType = headers['content-type'] || headers['Content-Type']
-    || 'application/octet-stream';
   // OTCS usually echoes the stored filename here — the source of truth for the extension.
-  const fileName = filenameFromDisposition(
-    headers['content-disposition'] || headers['Content-Disposition'],
-  );
+  const fileName = filenameFromDisposition(headers['content-disposition']);
+  // Serve OTCS's content-type, but if it's missing or a generic octet-stream, recover the real
+  // type from the filename extension so the browser renders the file inline (a camera JPEG
+  // shows as an image) instead of mis-handling it. This is what makes non-PDF delivery work.
+  const contentType = resolveContentType(headers['content-type'], fileName);
   return { buffer: Buffer.from(res.data), contentType, fileName };
 }
 
 /**
  * Strip characters that would break a multipart `filename="…"` part or a Content-Disposition
  * header (CR/LF/quote/backslash) and bound the length. Shared by upload (multipart framing)
- * and download (response header) so the rule lives in one place.
+ * and download (response header) so the rule lives in one place. (Length is in JS code units,
+ * not UTF-8 bytes — fine for OTCS / Content-Disposition, which tolerate multi-byte names.)
  */
 function sanitizeFileName(name) {
   return String(name).replace(/[\r\n"\\]/g, '_').slice(0, 255);
@@ -291,6 +293,40 @@ const EXT_BY_TYPE = {
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
 };
 
+// extension → MIME, for the reverse direction: recovering a renderable content-type when OTCS
+// reports none / a generic octet-stream. Only the formats worth rendering inline in a browser.
+const TYPE_BY_EXT = {
+  pdf: 'application/pdf',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  heic: 'image/heic',
+  tiff: 'image/tiff',
+  bmp: 'image/bmp',
+  svg: 'image/svg+xml',
+  txt: 'text/plain',
+  csv: 'text/csv',
+  json: 'application/json',
+};
+
+/** The lowercased extension of a filename, or '' if none. */
+function extensionOf(fileName) {
+  const dot = fileName ? fileName.lastIndexOf('.') : -1;
+  return dot > 0 ? fileName.slice(dot + 1).toLowerCase() : '';
+}
+
+/**
+ * Pick the content-type to serve: trust OTCS's, unless it's absent or a generic
+ * `application/octet-stream` and the filename extension names something more specific.
+ */
+function resolveContentType(reported, fileName) {
+  const base = String(reported || '').split(';')[0].trim().toLowerCase();
+  if (base && base !== 'application/octet-stream') return reported;
+  return TYPE_BY_EXT[extensionOf(fileName)] || base || 'application/octet-stream';
+}
+
 /** Best-effort extension for a content-type. Falls back to the subtype, then `bin`. */
 function extensionForType(contentType) {
   const base = String(contentType || '').split(';')[0].trim().toLowerCase();
@@ -307,16 +343,22 @@ function extensionForType(contentType) {
 /** Parse `filename`/`filename*` out of a Content-Disposition header; null if absent. */
 function filenameFromDisposition(disposition) {
   if (!disposition) return null;
-  // RFC 5987 `filename*=UTF-8''name.ext` takes precedence over plain `filename="name.ext"`.
-  const star = /filename\*\s*=\s*[^']*''([^;]+)/i.exec(disposition);
+  // RFC 5987 `filename*=charset'lang'name.ext` (language tag optional) wins over plain
+  // `filename=`. Allow any token between the two apostrophes so a language tag doesn't break it.
+  const star = /filename\*\s*=\s*[^']*'[^']*'([^;]+)/i.exec(disposition);
   if (star) {
+    const value = star[1].trim();
     try {
-      return decodeURIComponent(star[1].trim());
+      return decodeURIComponent(value);
     } catch {
-      return star[1].trim();
+      return value;
     }
   }
-  const plain = /filename\s*=\s*"?([^";]+)"?/i.exec(disposition);
+  // A quoted value may legitimately contain `;`, so capture up to the closing quote; otherwise
+  // take the unquoted token up to the first `;`.
+  const quoted = /filename\s*=\s*"([^"]*)"/i.exec(disposition);
+  if (quoted) return quoted[1].trim();
+  const plain = /filename\s*=\s*([^;]+)/i.exec(disposition);
   return plain ? plain[1].trim() : null;
 }
 
@@ -481,6 +523,8 @@ module.exports = {
   downloadDocument,
   downloadFileName,
   extensionForType,
+  resolveContentType,
+  filenameFromDisposition,
   sanitizeFileName,
   getNodeName,
   categorize,
