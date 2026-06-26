@@ -1,6 +1,6 @@
 /* GPC Document Delivery — design system.
-   Editorial-corporate: navy anchor, warm amber accent, Fraunces × Hanken Grotesk. */
-@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,600&family=Hanken+Grotesk:wght@400;500;600;700&display=swap');
+   Editorial-corporate: navy anchor, warm amber accent, Fraunces × Hanken Grotesk.
+   Font faces are self-hosted via @fontsource (imported in main.js). */
 
 :root {
   color-scheme: light;

@@ -25,6 +25,14 @@ const byCategory = computed(() => {
 
 const totalDocs = computed(() => docs.value.length)
 
+// i18n-friendly count label (avoids inline pluralization noise in the template).
+const docsLabel = computed(() => {
+  if (loading.value) return 'Cargando…'
+  const n = totalDocs.value
+  if (n === 0) return 'Sin documentos'
+  return n === 1 ? '1 documento disponible' : `${n} documentos disponibles`
+})
+
 // Initials for the avatar — first letters of the first two words, else first two chars.
 const initials = computed(() => {
   const n = (user.value?.name || '').trim()
@@ -87,7 +95,9 @@ function onPick(e) {
 async function loadUser() {
   try {
     user.value = await currentUser()
-  } catch {
+  } catch (e) {
+    // Don't block the page, but leave a breadcrumb for prod debugging of a misconfigured whoami.
+    console.warn('whoami failed; rendering without user chip:', e.message)
     user.value = null
   }
 }
@@ -119,7 +129,10 @@ onMounted(() => {
         >{{ initials }}</span>
         <span class="user-text">
           <span class="user-name">{{ user.name }}</span>
-          <span class="user-email">{{ user.email }}</span>
+          <span
+            v-if="user.email"
+            class="user-email"
+          >{{ user.email }}</span>
         </span>
       </div>
     </div>
@@ -128,9 +141,11 @@ onMounted(() => {
   <main>
     <div class="page-head">
       <div>
-        <h2 class="page-title">Mis documentos</h2>
+        <h2 class="page-title">
+          Mis documentos
+        </h2>
         <p class="page-meta">
-          {{ loading ? 'Cargando…' : `${totalDocs} documento${totalDocs === 1 ? '' : 's'} disponible${totalDocs === 1 ? '' : 's'}` }}
+          {{ docsLabel }}
         </p>
       </div>
       <button
@@ -218,12 +233,18 @@ onMounted(() => {
             aria-hidden="true"
           >PDF</span>
           <div class="doc-main">
-            <div class="doc-name">{{ d.displayName }}</div>
+            <div class="doc-name">
+              {{ d.displayName }}
+            </div>
             <div
               v-if="d.subtitle"
               class="doc-sub"
-            >{{ d.subtitle }}</div>
-            <div class="doc-url">/invoice/{{ d.token.slice(0, 16) }}…</div>
+            >
+              {{ d.subtitle }}
+            </div>
+            <div class="doc-url">
+              /invoice/{{ d.token.slice(0, 16) }}…
+            </div>
           </div>
           <span class="doc-size">{{ formatSize(d.sizeBytes) }}</span>
           <a
@@ -435,6 +456,7 @@ main { max-width: 1040px; margin: 0 auto; padding: 28px 24px 64px; }
   font-size: 12px;
   font-weight: 700;
   color: var(--accent);
+  background: var(--line-soft); /* fallback for browsers without color-mix */
   background: color-mix(in srgb, var(--accent) 12%, #fff);
   border-radius: 999px;
 }
@@ -464,6 +486,7 @@ main { max-width: 1040px; margin: 0 auto; padding: 28px 24px 64px; }
   width: 40px; height: 40px;
   font-size: 10px; font-weight: 800; letter-spacing: 0.5px;
   color: var(--accent);
+  background: var(--line-soft); /* fallback for browsers without color-mix */
   background: color-mix(in srgb, var(--accent) 10%, #fff);
   border-radius: 10px;
 }

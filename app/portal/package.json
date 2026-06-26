@@ -10,6 +10,8 @@
     "lint": "eslint . --max-warnings 0"
   },
   "dependencies": {
+    "@fontsource/fraunces": "^5.2.9",
+    "@fontsource/hanken-grotesk": "^5.2.8",
     "vue": "^3"
   },
   "devDependencies": {
