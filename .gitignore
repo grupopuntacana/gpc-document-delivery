@@ -2,6 +2,8 @@ node_modules/
 gen/
 *.mtar
 mta_archives/
+Makefile*.mta
+makefile*.mta
 .env
 default-env.json
 *-credentials.json

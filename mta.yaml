@@ -20,6 +20,16 @@ modules:
       # Non-secret config: the OpenText folder (objId) the portal lists.
       # 52480 = demo folder holding the invoice/energy PDFs.
       OPENTEXT_FOLDER_ID: "52480"
+      # Option A vs B delivery toggle: "stream" (direct from OpenText) | "cdn"
+      # (302 to a CloudFront signed URL backed by the S3 cache). Defaults to stream.
+      OPENTEXT_DELIVERY_MODE: "cdn"
+      # Non-secret CloudFront/S3 cache config (mirrors the Python prototype .env).
+      # Secrets (CloudFrontPrivateKey, AWS_ACCESS_KEY_ID/SECRET) live in the Credential Store.
+      AWS_REGION: "us-east-1"
+      S3_BUCKET: "opentext-cdn-cache-gpc"
+      CLOUDFRONT_DOMAIN: "d3ef18l0vjlle9.cloudfront.net"
+      CLOUDFRONT_KEY_PAIR_ID: "KOZINHBBRK0NV"
+      SIGNED_URL_TTL_SECONDS: "300"
     parameters:
       instances: 1
       buildpack: nodejs_buildpack

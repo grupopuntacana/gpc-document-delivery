@@ -88,6 +88,8 @@ const DEST_OTCS = process.env.OPENTEXT_OTCS_DESTINATION || 'OpenText_OTCS';
 async function authenticate() {
   const dest = await deps.getDestination({ destinationName: DEST_OTDS });
   if (!dest) throw new Error(`Destination "${DEST_OTDS}" not found`);
+  // The OTDS auth endpoint doesn't support CSRF preflight (HEAD/OPTIONS) — disable the
+  // SAP Cloud SDK's CSRF middleware for this call (it's a JSON-body auth, not form-based).
   const res = await deps.executeHttpRequest(
     { destinationName: DEST_OTDS },
     {
@@ -95,6 +97,7 @@ async function authenticate() {
       url: OTDS_AUTH_PATH,
       headers: { 'Content-Type': 'application/json' },
       data: { user_name: dest.username, password: dest.password },
+      disableCsrfTokenFetch: true,
       ...otdsAgents,
     }
   );
@@ -253,6 +256,17 @@ async function downloadDocument(nodeId) {
   return { buffer: Buffer.from(res.data), contentType };
 }
 
+/**
+ * Fetch a node's display name (original filename). Mirrors Python `get_node_metadata`
+ * used by `cdn_publisher.publish` to tag the S3 object with `original-filename`.
+ * Best-effort: returns `${nodeId}.pdf` if the name can't be read.
+ * @returns {Promise<string>}
+ */
+async function getNodeName(nodeId) {
+  const res = await withTicket((ticket) => fetchNode(ticket, nodeId));
+  return nodeTitle(res.data) || `${nodeId}.pdf`;
+}
+
 const YEAR_PREFIX = /^\d{4}-\d{2}-/;
 
 /**
@@ -280,6 +294,7 @@ module.exports = {
   pingNode,
   listFolder,
   downloadDocument,
+  getNodeName,
   categorize,
   NODE_TYPE_DOCUMENT,
   // exported for unit tests
