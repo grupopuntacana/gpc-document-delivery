@@ -5,6 +5,7 @@ const cds = require('@sap/cds');
 
 const credstore = require('./lib/credstore');
 const opentext = require('./lib/opentext');
+const { appVersion } = require('./lib/version');
 
 const LOG = cds.log('selftest');
 
@@ -46,6 +47,8 @@ module.exports = class SelfTestService extends cds.ApplicationService {
         return req.reject(502, `OpenText ping failed: ${err.message}`);
       }
     });
+
+    this.on('version', () => ({ version: appVersion() }));
 
     return super.init();
   }

@@ -37,7 +37,12 @@ jobs:
           cf-username: ${{ vars.CF_USERNAME }}
           cf-password: ${{ secrets.CF_PASSWORD }}
       - run: npm install
+      # On a tag deploy, surface the tag (v1.2.0) to the SPA build via APP_VERSION;
+      # vite.config.js reads it into __APP_VERSION__. Empty on branch deploys, so
+      # the build falls back to git describe / package.json.
       - run: npx cds up
+        env:
+          APP_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
 
       - run: cf logs "${{ env.APP_NAME }}-srv" --recent
         if: always()
