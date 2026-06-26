@@ -1,6 +1,6 @@
 # 0002 — Option B: CloudFront signed URLs + S3 write-through cache
 
-**Status:** in progress — Layers 1+2+3 implemented & unit-tested (decision A: Credential Store). Remaining: real end-to-end cache-hit verification on BTP + the A/B benchmark (task 0003).
+**Status:** in progress — Layers 1+2+3 implemented & unit-tested (decision A: Credential Store). Remaining: real end-to-end cache-hit verification on BTP + the A/B benchmark (a follow-up, not yet filed as a task).
 **Depends on:** [0001](0001-wire-credential-store.md) (Credential Store holds the CloudFront key + AWS creds)
 **Goal:** the prototype's reason for existing — produce the **decision-ready latency
 comparison** between serving PDFs direct from OpenText (Option A, current) and via a
@@ -55,7 +55,7 @@ AWS access key/secret for S3 — see open question.
       so both can be benchmarked.
 - [ ] S3 is treated as a **cache, not store-of-record**: objects tagged/metadata'd
       `cache-only=true`, `source-of-truth=opentext` (mirror `cdn_publisher.py`).
-- [ ] A benchmark captures Option A vs B latency (feeds task 0003).
+- [ ] A benchmark captures Option A vs B latency (a follow-up benchmark, not yet filed as a task).
 
 ## Checklist
 
@@ -93,7 +93,7 @@ AWS access key/secret for S3 — see open question.
       `stream` -> existing Option A body.
 - [x] Keep the `t0`/timing log; log mode + ms so the two paths are comparable.
 - [ ] Verify a token still resolves and the redirect serves the PDF **end-to-end** (needs
-      a provisioned bucket + AWS creds on BTP — pending deploy; feeds task 0003 benchmark).
+      a provisioned bucket + AWS creds on BTP — pending deploy; feeds the follow-up benchmark).
 
 ## References
 - Python: `../python/opentext-cdn-prototype/src/cdn_publisher.py` (port target),
