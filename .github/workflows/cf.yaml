@@ -50,12 +50,41 @@ jobs:
       # - run: cf logs "${{ env.APP_NAME }}-db-deployer" --recent
       #   if: always()
 
-      - name: Get application URL
+      # The portal SPA is hosted by the Application Frontend service, not as a CF
+      # route on the srv app — so its URL comes from `afctl` (@sap/appfront-cli),
+      # not `cf app`. afctl authenticates separately from cf: mint a service key
+      # from the already-authenticated cf session (no stored secret), log in with
+      # it, and read the deployed app's URL. Best-effort: never fails the deploy.
+      - name: Get Application Frontend URL
         id: route
+        continue-on-error: true
         shell: bash
+        env:
+          AF_SERVICE: gpc-docdelivery-app-front
+          AF_KEY: ci-afctl
+          AF_APP: gpc.documentdelivery.portal
+          AFCTL_COLORS: "false"
         run: |
-          host=$(cf app "${APP_NAME}" | awk '/routes:/ {print $2}' | sed -E 's#^https?://##; s/,.*$//')
-          echo "url=https://$host" >> "$GITHUB_OUTPUT"
+          cf create-service-key "$AF_SERVICE" "$AF_KEY" >/dev/null 2>&1 || true
+          # --service-key takes a JSON string OR a path, but afctl caps every arg
+          # at 1024 chars and the key JSON is longer — so write it to a file and
+          # pass the path. afctl auto-unwraps the `credentials` envelope.
+          KEY_FILE=$(mktemp)
+          trap 'rm -f "$KEY_FILE"' EXIT
+          cf service-key "$AF_SERVICE" "$AF_KEY" | sed -n '/^{/,$p' > "$KEY_FILE"
+          afctl() { npx -y -p @sap/appfront-cli afctl "$@"; }
+          afctl login --service-key "$KEY_FILE" >/dev/null || { echo "afctl login failed"; exit 0; }
+          # Print the list so every deployed link is visible in the job log.
+          echo "----- afctl list -----"
+          LIST=$(afctl list 2>&1) || true
+          echo "$LIST"
+          # `afctl list` shows all apps in the space (Name Version State URL); pick
+          # our app's row by name, then take the URL from it.
+          URL=$(printf '%s\n' "$LIST" | grep -F "$AF_APP" | grep -Eo 'https://[^[:space:]"]+' | head -1 || true)
+          if [ -n "${URL:-}" ]; then
+            echo "url=$URL" >> "$GITHUB_OUTPUT"
+            echo "Portal URL: $URL"
+          fi
     environment:
       name: ${{ inputs.environment || 'Staging' }}
       url:  ${{ steps.route.outputs.url }}
