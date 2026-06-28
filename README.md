@@ -101,8 +101,8 @@ does that encryption + POST for you, reusing the bound service key:
 
 ```bash
 # 1. One-time: a service key exposes the binding (url, mTLS cert/key, encryption keys)
-cf create-service-key document-delivery-credstore cli
-export CREDSTORE_CREDS="$(cf service-key document-delivery-credstore cli | tail -n +2)"
+cf create-service-key credstore-shared cli
+export CREDSTORE_CREDS="$(cf service-key credstore-shared cli | tail -n +2)"
 
 # 2. Write the entries credstore.js reads (namespace from CREDSTORE_NAMESPACE, default above)
 node scripts/credstore-put.js password SHARED_LINK_SECRET    '<64-char-secret>'
@@ -112,7 +112,7 @@ node scripts/credstore-put.js password AWS_ACCESS_KEY_ID     '<aws-access-key-id
 node scripts/credstore-put.js password AWS_SECRET_ACCESS_KEY '<aws-secret-access-key>'
 
 # 3. Cleanup once done — the service key carries live binding creds
-cf delete-service-key document-delivery-credstore cli
+cf delete-service-key credstore-shared cli
 ```
 
 > `credstore.js` expects: `password` entries `SHARED_LINK_SECRET`, `AWS_ACCESS_KEY_ID`,
@@ -128,7 +128,9 @@ cf delete-service-key document-delivery-credstore cli
 ## Hybrid testing (local code, live BTP services)
 
 ```bash
-cds bind -2 document-delivery-credstore,document-delivery-destination,document-delivery-connectivity
+# Note: credstore is an existing shared service — its real CF instance is `credstore-shared`,
+# not the `document-delivery-credstore` MTA alias.
+cds bind -2 credstore-shared,document-delivery-destination,document-delivery-connectivity
 npm run watch:hybrid     # cds watch --profile hybrid
 # checkSecret.source should now be 'credstore'; pingOpenText.ok=true with the real node-2000 title
 ```

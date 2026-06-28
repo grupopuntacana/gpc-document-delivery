@@ -9,8 +9,8 @@
  * encryption + POST, reusing the same binding so the auth (mTLS or Basic) matches.
  *
  * Usage:
- *   cf create-service-key document-delivery-credstore cli
- *   export CREDSTORE_CREDS="$(cf service-key document-delivery-credstore cli | tail -n +2)"
+ *   cf create-service-key credstore-shared cli
+ *   export CREDSTORE_CREDS="$(cf service-key credstore-shared cli | tail -n +2)"
  *   node scripts/credstore-put.js key      CloudFrontPrivateKey "$(cat cloudfront_private_key.pem)"
  *   node scripts/credstore-put.js password AWS_ACCESS_KEY_ID     'AKIA...'
  *   node scripts/credstore-put.js password AWS_SECRET_ACCESS_KEY '...'
