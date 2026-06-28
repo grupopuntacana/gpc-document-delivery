@@ -63,13 +63,13 @@ until Option B). Supply the secret via a gitignored MTA extension descriptor:
 ```bash
 cp secrets.mtaext.example secrets.mtaext       # fill in the 64-char secret
 mbt build
-cf deploy mta_archives/gpc-document-delivery_0.1.0.mtar -e secrets.mtaext
+cf deploy mta_archives/document-delivery_1.0.0.mtar -e secrets.mtaext
 ```
 
-Quick alternative (no extension file): `cf set-env gpc-docdelivery-srv SHARED_LINK_SECRET '<secret>' && cf restage gpc-docdelivery-srv`.
+Quick alternative (no extension file): `cf set-env document-delivery-srv SHARED_LINK_SECRET '<secret>' && cf restage document-delivery-srv`.
 Locally/hybrid: just `export SHARED_LINK_SECRET=<secret>`.
 
-**To switch to Credential Store later:** uncomment the `gpc-docdelivery-credstore` resource
+**To switch to Credential Store later:** uncomment the `document-delivery-credstore` resource
 + the srv `requires` line in `mta.yaml`, create the entries (below), redeploy, and delete
 `secrets.mtaext`. `credstore.js` auto-detects the binding — no code change.
 
@@ -101,8 +101,8 @@ does that encryption + POST for you, reusing the bound service key:
 
 ```bash
 # 1. One-time: a service key exposes the binding (url, mTLS cert/key, encryption keys)
-cf create-service-key gpc-docdelivery-credstore cli
-export CREDSTORE_CREDS="$(cf service-key gpc-docdelivery-credstore cli | tail -n +2)"
+cf create-service-key document-delivery-credstore cli
+export CREDSTORE_CREDS="$(cf service-key document-delivery-credstore cli | tail -n +2)"
 
 # 2. Write the entries credstore.js reads (namespace from CREDSTORE_NAMESPACE, default above)
 node scripts/credstore-put.js password SHARED_LINK_SECRET    '<64-char-secret>'
@@ -112,7 +112,7 @@ node scripts/credstore-put.js password AWS_ACCESS_KEY_ID     '<aws-access-key-id
 node scripts/credstore-put.js password AWS_SECRET_ACCESS_KEY '<aws-secret-access-key>'
 
 # 3. Cleanup once done — the service key carries live binding creds
-cf delete-service-key gpc-docdelivery-credstore cli
+cf delete-service-key document-delivery-credstore cli
 ```
 
 > `credstore.js` expects: `password` entries `SHARED_LINK_SECRET`, `AWS_ACCESS_KEY_ID`,
@@ -123,12 +123,12 @@ cf delete-service-key gpc-docdelivery-credstore cli
 > the JWE protected header must carry an `iat` in **epoch seconds** and be **< 2 minutes
 > old** (replay guard); algorithms are fixed to `RSA-OAEP-256` + `A256GCM`; `Content-Type`
 > must be `application/jose`. No redeploy is needed after a write — `credstore.js` re-reads
-> on the next request — but `cf restage gpc-docdelivery-srv` forces a clean instance.
+> on the next request — but `cf restage document-delivery-srv` forces a clean instance.
 
 ## Hybrid testing (local code, live BTP services)
 
 ```bash
-cds bind -2 gpc-docdelivery-credstore,gpc-docdelivery-destination,gpc-docdelivery-connectivity
+cds bind -2 document-delivery-credstore,document-delivery-destination,document-delivery-connectivity
 npm run watch:hybrid     # cds watch --profile hybrid
 # checkSecret.source should now be 'credstore'; pingOpenText.ok=true with the real node-2000 title
 ```
@@ -166,7 +166,7 @@ open them by clicking. Three pieces:
   filename Django-style (append an 8-hex UUID suffix on collision), and returns
   `{ nodeId, name, token }`. Target folder from `OPENTEXT_INGEST_FOLDER_ID` (falls back to
   `OPENTEXT_FOLDER_ID`, default `2000`) so an upload shows up in the portal listing on refresh.
-- **Vue SPA** (`app/portal/src/App.vue` + `cap.js`) — fetches `documents()`, renders the
+- **Vue SPA** (`app/frontend/src/App.vue` + `cap.js`) — fetches `documents()`, renders the
   rows grouped (Facturas / Consumo / Otros), each with an **Open PDF** link to
   `/invoice/{token}`. A drag-and-drop **upload box** posts to `IngestService.uploadDocument`
   and refreshes the listing.
@@ -178,28 +178,28 @@ sync if either changes.
 Listing real data requires a live OpenText destination, so run it **hybrid** (`cds bind`)
 or deployed — same as the Python demo needs live OpenText.
 
-## Portal UI (`app/portal`)
+## Portal UI (`app/frontend`)
 
 A Vite + Vue 3 SPA, scaffolded with `cds add vue --into portal`, served on BTP via the
 **SAP Application Frontend** (`app-front`) service — same delivery pattern as `../bookshop`.
 
-- `app/portal/public/xs-app.json` — routing: `/odata/**` → `srv-api` destination,
+- `app/frontend/public/xs-app.json` — routing: `/odata/**` → `srv-api` destination,
   everything else → `app-front`. (`/rest/**` is open/anonymous, ready for the future
   customer-facing token route.)
-- `app/portal/public/manifest.json` — Application Frontend app descriptor.
-- `app/portal/vite.config.js` — builds `dist/` and zips it to `dist/portal.zip` (the
+- `app/frontend/public/manifest.json` — Application Frontend app descriptor.
+- `app/frontend/vite.config.js` — builds `dist/` and zips it to `dist/frontend.zip` (the
   artifact the MTA's `com.sap.application.content` deployer uploads).
 
 The MTA wires three pieces for this: the `gpcdocdeliveryportal` html5 module (runs
-`npm ci && npm run build`), the `gpc-docdelivery-app-deployer` content module (uploads
-`portal.zip` + registers the `srv-api` destination), and the `gpc-docdelivery-app-front`
+`npm ci && npm run build`), the `document-delivery-app-deployer` content module (uploads
+`frontend.zip` + registers the `srv-api` destination), and the `document-delivery-app-front`
 resource. `deploy_mode: html5-repo` is set at the top of `mta.yaml`.
 
 Local UI dev (Vite proxies `/odata` → the CAP server on :4004):
 
 ```bash
 npx cds serve &                      # CAP backend on :4004
-npm --prefix app/portal run dev      # SPA on :5173, proxying /odata to :4004
+npm --prefix app/frontend run dev      # SPA on :5173, proxying /odata to :4004
 ```
 
 ## Deploy
@@ -207,7 +207,7 @@ npm --prefix app/portal run dev      # SPA on :5173, proxying /odata to :4004
 ```bash
 npm install
 mbt build                            # builds srv + portal SPA + content deployer into one mtar
-cf deploy mta_archives/gpc-document-delivery_0.1.0.mtar
+cf deploy mta_archives/document-delivery_1.0.0.mtar
 ```
 
 **CI/CD.** Pushing a `v*` tag (e.g. `git tag v0.2.0 && git push origin v0.2.0`) deploys to
@@ -250,17 +250,17 @@ CAP log levels are set per-logger via the `CDS_LOG_LEVELS` env var (JSON map). R
 two loggers, restage, then read the logs:
 
 ```bash
-cf set-env gpc-docdelivery-srv CDS_LOG_LEVELS '{"portal":"debug","opentext":"debug"}'
-cf restage gpc-docdelivery-srv
+cf set-env document-delivery-srv CDS_LOG_LEVELS '{"portal":"debug","opentext":"debug"}'
+cf restage document-delivery-srv
 
 # load the portal a couple of times, then pull the timing lines:
-cf logs gpc-docdelivery-srv --recent | grep -E "withTicket|documents"
+cf logs document-delivery-srv --recent | grep -E "withTicket|documents"
 ```
 
 Turn it back off when done:
 
 ```bash
-cf unset-env gpc-docdelivery-srv CDS_LOG_LEVELS && cf restage gpc-docdelivery-srv
+cf unset-env document-delivery-srv CDS_LOG_LEVELS && cf restage document-delivery-srv
 ```
 
 Locally, the same applies to `cds watch`: `CDS_LOG_LEVELS='{"portal":"debug","opentext":"debug"}' cds watch`.

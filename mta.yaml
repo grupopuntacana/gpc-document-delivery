@@ -42,19 +42,10 @@ modules:
           config:
             credential-type: X509_GENERATED
             app-identifier: srv
-      - name: document-delivery-db
       - name: document-delivery-destination
       - name: document-delivery-connectivity
       - name: document-delivery-logging
       - name: document-delivery-credstore
-
-  - name: document-delivery-db-deployer
-    type: hdb
-    path: gen/db
-    parameters:
-      buildpack: nodejs_buildpack
-    requires:
-      - name: document-delivery-db
 
   - name: document-delivery-app-deployer
     type: com.sap.application.content
@@ -109,11 +100,6 @@ resources:
           token-policy:
             access-token-format: "jwt"
         xsuaa-cross-consumption: true
-  - name: document-delivery-db
-    type: com.sap.xs.hdi-container
-    parameters:
-      service: hana
-      service-plan: hdi-shared
   - name: document-delivery-app-front
     type: org.cloudfoundry.managed-service
     parameters:

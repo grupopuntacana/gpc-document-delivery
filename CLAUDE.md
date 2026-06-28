@@ -41,9 +41,9 @@ npm run watch            # cds watch
 npm run watch:hybrid     # cds watch --profile hybrid (local code, live BTP services via `cds bind`)
 
 # Portal SPA (Vite proxies /odata -> :4004)
-npm --prefix app/portal run dev            # SPA on :5173
+npm --prefix app/frontend run dev            # SPA on :5173
 
-mbt build && cf deploy mta_archives/gpc-document-delivery_0.1.0.mtar   # deploy
+mbt build && cf deploy mta_archives/document-delivery_1.0.0.mtar   # deploy
 ```
 
 Tests are **vitest**, not the CAP/Jest default. There is no separate vitest config file.
