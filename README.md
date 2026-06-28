@@ -182,7 +182,8 @@ or deployed — same as the Python demo needs live OpenText.
 
 ## Portal UI (`app/frontend`)
 
-A Vite + Vue 3 SPA, scaffolded with `cds add vue --into portal`, served on BTP via the
+A Vite + Vue 3 SPA, scaffolded with `cds add vue --into portal` then renamed to
+`app/frontend` (`cds add` reserves the `portal` path), served on BTP via the
 **SAP Application Frontend** (`app-front`) service — same delivery pattern as `../bookshop`.
 
 - `app/frontend/public/xs-app.json` — routing: `/odata/**` → `srv-api` destination,
@@ -208,9 +209,15 @@ npm --prefix app/frontend run dev      # SPA on :5173, proxying /odata to :4004
 
 ```bash
 npm install
-mbt build                            # builds srv + portal SPA + content deployer into one mtar
+mbt build                            # builds srv + frontend SPA + content deployer into one mtar
 cf deploy mta_archives/document-delivery_1.0.0.mtar
 ```
+
+> **First deploy after the `gpc-document-delivery` → `document-delivery` rename:** CF keys
+> deployments by MTA ID, so the new MTA deploys alongside the old one and the renamed
+> managed-service instances are re-provisioned (the old ones orphaned). After confirming the
+> new deployment is healthy, clean up the stale MTA with `cf delete-mta gpc-document-delivery`.
+> The `credstore-shared` existing-service is unaffected.
 
 **CI/CD.** Pushing a `v*` tag (e.g. `git tag v0.2.0 && git push origin v0.2.0`) deploys to
 **Production** via `.github/workflows/release.yaml`. The release first runs a `verify-ci`

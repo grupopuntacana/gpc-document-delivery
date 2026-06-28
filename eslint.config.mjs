@@ -4,7 +4,7 @@ import { configs as airbnb, plugins as airbnbPlugins } from 'eslint-config-airbn
 
 export default [
   // Lint the CAP backend only (srv, test, root configs). The Vue SPA under
-  // app/portal/ has its own toolchain (app/portal/eslint.config.mjs), app/ also
+  // app/frontend/ has its own toolchain (app/frontend/eslint.config.mjs), app/ also
   // holds compiled bundles, and gen/ is generated.
   {
     ignores: ['app/**', 'gen/**', 'dist/**'],
