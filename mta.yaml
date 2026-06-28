@@ -1,7 +1,7 @@
 _schema-version: 3.3.0
-ID: gpc-document-delivery
-version: 0.1.0
-description: "GPC Document Delivery (CAP) — Milestone 1: Credential Store + Destination spike"
+ID: document-delivery
+version: 1.0.0
+description: "GPC Document Delivery."
 parameters:
   enable-parallel-deployments: true
   deploy_mode: html5-repo
@@ -11,20 +11,13 @@ build-parameters:
       commands:
         - npm ci
         - npx cds build --production
-
 modules:
-  - name: gpc-docdelivery-srv
+  - name: document-delivery-srv
     type: nodejs
     path: gen/srv
     properties:
-      # Non-secret config: the OpenText folder (objId) the portal lists.
-      # 52480 = demo folder holding the invoice/energy PDFs.
       OPENTEXT_FOLDER_ID: "52480"
-      # Option A vs B delivery toggle: "stream" (direct from OpenText) | "cdn"
-      # (302 to a CloudFront signed URL backed by the S3 cache). Defaults to stream.
       OPENTEXT_DELIVERY_MODE: "cdn"
-      # Non-secret CloudFront/S3 cache config (mirrors the Python prototype .env).
-      # Secrets (CloudFrontPrivateKey, AWS_ACCESS_KEY_ID/SECRET) live in the Credential Store.
       AWS_REGION: "us-east-1"
       S3_BUCKET: "opentext-cdn-cache-gpc"
       CLOUDFRONT_DOMAIN: "d3ef18l0vjlle9.cloudfront.net"
@@ -39,53 +32,58 @@ modules:
     build-parameters:
       builder: npm-ci
     provides:
-      - name: srv-api
+      - name: srv-api # required by consumers of CAP services (e.g. approuter)
         properties:
           srv-url: ${default-url}
           srv-cert-url: '${protocol}://${default-host}.cert.${default-domain}'
     requires:
-      - name: gpc-docdelivery-ias
+      - name: document-delivery-ias
         parameters:
           config:
             credential-type: X509_GENERATED
             app-identifier: srv
-      - name: gpc-docdelivery-destination
-      # Required to reach OpenText (on-premise) through the Cloud Connector tunnel.
-      - name: gpc-docdelivery-connectivity
-      - name: gpc-docdelivery-credstore
-      - name: gpc-docdelivery-logs
+      - name: document-delivery-db
+      - name: document-delivery-destination
+      - name: document-delivery-connectivity
+      - name: document-delivery-logging
+      - name: document-delivery-credstore
 
-  # Deploys the built portal SPA to the Application Frontend service and
-  # registers the srv-api destination the SPA's xs-app.json routes to.
-  - name: gpc-docdelivery-app-deployer
+  - name: document-delivery-db-deployer
+    type: hdb
+    path: gen/db
+    parameters:
+      buildpack: nodejs_buildpack
+    requires:
+      - name: document-delivery-db
+
+  - name: document-delivery-app-deployer
     type: com.sap.application.content
     path: gen
     build-parameters:
       build-result: app/
       requires:
-        - name: gpcdocdeliveryportal
+        - name: documentdeliveryfrontend
           artifacts:
-            - portal.zip
+            - frontend.zip
           target-path: app/
     requires:
       - name: srv-api
-      - name: gpc-docdelivery-app-front
+      - name: document-delivery-app-front
         parameters:
           content-target: true
           config:
-            IASDependencyName: gpc-docdelivery-ias-api
+            IASDependencyName: document-delivery-ias-api
     parameters:
       config:
         destinations:
           - name: srv-api
             url: ~{srv-api/srv-url}
             forwardAuthToken: true
-            IASDependencyName: gpc-docdelivery-ias-api
+            IASDependencyName: document-delivery-ias-api
 
-  # Builds the Vue SPA (app/portal) into dist/ + portal.zip via vite.
-  - name: gpcdocdeliveryportal
+  - name: documentdeliveryfrontend
     type: html5
-    path: app/portal
+    path: app/frontend
     build-parameters:
       build-result: dist
       builder: custom
@@ -96,50 +94,47 @@ modules:
         []
 
 resources:
-  # IAS-only auth, matching ../bookshop. The app uses `authenticated-user`
-  # (no scopes/roles), so XSUAA is not needed; add it (or AMS) only when
-  # role/scope-based authorization is introduced.
-  - name: gpc-docdelivery-ias
+  - name: document-delivery-ias
     type: org.cloudfoundry.managed-service
     parameters:
       service: identity
-      service-name: gpc-docdelivery-ias
+      service-name: document-delivery-ias
       service-plan: application
       config:
         provided-apis:
-          - name: gpc-docdelivery-ias-api
+          - name: document-delivery-ias-api
             description: API exposed by the application
-        display-name: GPC Document Delivery (DEV)
+        display-name: document-delivery
         oauth2-configuration:
           token-policy:
             access-token-format: "jwt"
         xsuaa-cross-consumption: true
-  # Destination Service: holds the OpenText connectivity entries
-  # (OpenText_OTDS -> https://otion.grupopuntacana.com:8443, OpenText_OTCS -> https://otion.grupopuntacana.com).
-  # Entries are created in the BTP cockpit / via cf CLI after deploy — see README.
-  - name: gpc-docdelivery-destination
-    type: org.cloudfoundry.managed-service
+  - name: document-delivery-db
+    type: com.sap.xs.hdi-container
     parameters:
-      service: destination
-      service-plan: lite
-  # Cloud Connector tunnel for OnPremise destinations (OpenText via otds-dev/otcs-dev).
-  - name: gpc-docdelivery-connectivity
-    type: org.cloudfoundry.managed-service
-    parameters:
-      service: connectivity
-      service-plan: lite
-  - name: gpc-docdelivery-credstore
-    type: org.cloudfoundry.existing-service
-    parameters:
-      service-name: credstore-shared
-  - name: gpc-docdelivery-logs
-    type: org.cloudfoundry.managed-service
-    parameters:
-      service: application-logs
-      service-plan: lite
-  # SAP Application Frontend service — hosts the portal SPA (same pattern as ../bookshop).
-  - name: gpc-docdelivery-app-front
+      service: hana
+      service-plan: hdi-shared
+  - name: document-delivery-app-front
     type: org.cloudfoundry.managed-service
     parameters:
       service: app-front
       service-plan: developer
+  - name: document-delivery-destination
+    type: org.cloudfoundry.managed-service
+    parameters:
+      service: destination
+      service-plan: lite
+  - name: document-delivery-connectivity
+    type: org.cloudfoundry.managed-service
+    parameters:
+      service: connectivity
+      service-plan: lite
+  - name: document-delivery-logging
+    type: org.cloudfoundry.managed-service
+    parameters:
+      service: application-logs
+      service-plan: lite
+  - name: document-delivery-credstore
+    type: org.cloudfoundry.existing-service
+    parameters:
+      service-name: credstore-shared

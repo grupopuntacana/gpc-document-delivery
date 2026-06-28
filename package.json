@@ -5,6 +5,7 @@
   "private": true,
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1075.0",
+    "@cap-js/hana": "^2",
     "@sap-cloud-sdk/connectivity": "^4",
     "@sap-cloud-sdk/http-client": "^4",
     "@sap/cds": "^9",
