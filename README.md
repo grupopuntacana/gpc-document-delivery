@@ -190,7 +190,7 @@ A Vite + Vue 3 SPA, scaffolded with `cds add vue --into portal`, served on BTP v
 - `app/frontend/vite.config.js` — builds `dist/` and zips it to `dist/frontend.zip` (the
   artifact the MTA's `com.sap.application.content` deployer uploads).
 
-The MTA wires three pieces for this: the `gpcdocdeliveryportal` html5 module (runs
+The MTA wires three pieces for this: the `documentdeliveryfrontend` html5 module (runs
 `npm ci && npm run build`), the `document-delivery-app-deployer` content module (uploads
 `frontend.zip` + registers the `srv-api` destination), and the `document-delivery-app-front`
 resource. `deploy_mode: html5-repo` is set at the top of `mta.yaml`.

@@ -28,9 +28,9 @@ confirmed via `cf marketplace -e credstore`. The `mta.yaml` comment guesses
 ## Checklist
 
 ### 1. Enable the service in `mta.yaml`
-- [ ] Uncomment the `gpc-docdelivery-credstore` **resource** block.
+- [ ] Uncomment the `document-delivery-credstore` **resource** block.
 - [ ] Set its `service-plan: proxy` (not `free`).
-- [ ] Uncomment the `- name: gpc-docdelivery-credstore` line under the srv
+- [ ] Uncomment the `- name: document-delivery-credstore` line under the srv
       module `requires`.
 
 ### 2. Deploy (creates + binds the instance)
@@ -68,5 +68,5 @@ confirmed via `cf marketplace -e credstore`. The `mta.yaml` comment guesses
   env fallback, `isBound()`.
 - `srv/delivery-service.{cds,js}` — `checkSecret` action.
 - `README.md` → "Secrets during validation" + "Credential Store" sections.
-- `mta.yaml` — commented `gpc-docdelivery-credstore` resource + srv `requires` line.
+- `mta.yaml` — commented `document-delivery-credstore` resource + srv `requires` line.
 - Cross-side interop: secret must match Python `token_redirect.py` (ADR 0001 token format).
