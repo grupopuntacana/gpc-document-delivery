@@ -52,9 +52,6 @@ modules:
       - name: gpc-docdelivery-destination
       # Required to reach OpenText (on-premise) through the Cloud Connector tunnel.
       - name: gpc-docdelivery-connectivity
-      # Credential Store (paid) deferred during validation — SHARED_LINK_SECRET
-      # is supplied via env (see README). Re-enable this line + the resource below
-      # to switch to Credential Store; credstore.js auto-detects the binding.
       - name: gpc-docdelivery-credstore
       - name: gpc-docdelivery-logs
 
@@ -131,16 +128,10 @@ resources:
     parameters:
       service: connectivity
       service-plan: lite
-  # Credential Store (paid) — DEFERRED during validation. Re-enable this block and
-  # the srv `requires` line above to source SHARED_LINK_SECRET (+ CloudFront key) from
-  # the Credential Store; credstore.js switches automatically once the binding exists.
-  # Holds: SHARED_LINK_SECRET (password) + CloudFrontPrivateKey (key) under a namespace.
-  # Confirm the plan name on this tenant ("free" on trial; "standard" otherwise).
   - name: gpc-docdelivery-credstore
-    type: org.cloudfoundry.managed-service
+    type: org.cloudfoundry.existing-service
     parameters:
-      service: credstore
-      service-plan: standard
+      service-name: credstore-shared
   - name: gpc-docdelivery-logs
     type: org.cloudfoundry.managed-service
     parameters:
