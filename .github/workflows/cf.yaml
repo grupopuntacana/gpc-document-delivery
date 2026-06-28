@@ -19,7 +19,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  APP_NAME: gpc-docdelivery
+  APP_NAME: document-delivery
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -50,7 +50,7 @@ jobs:
       # - run: cf logs "${{ env.APP_NAME }}-db-deployer" --recent
       #   if: always()
 
-      # The portal SPA is hosted by the Application Frontend service, not as a CF
+      # The frontend SPA is hosted by the Application Frontend service, not as a CF
       # route on the srv app — so its URL comes from `afctl` (@sap/appfront-cli),
       # not `cf app`. afctl authenticates separately from cf: mint a service key
       # from the already-authenticated cf session (no stored secret), log in with
@@ -60,9 +60,9 @@ jobs:
         continue-on-error: true
         shell: bash
         env:
-          AF_SERVICE: gpc-docdelivery-app-front
+          AF_SERVICE: document-delivery-app-front
           AF_KEY: ci-afctl
-          AF_APP: gpc.documentdelivery.portal
+          AF_APP: document-delivery.frontend
           AFCTL_COLORS: "false"
         run: |
           cf create-service-key "$AF_SERVICE" "$AF_KEY" >/dev/null 2>&1 || true
@@ -83,7 +83,7 @@ jobs:
           URL=$(printf '%s\n' "$LIST" | grep -F "$AF_APP" | grep -Eo 'https://[^[:space:]"]+' | head -1 || true)
           if [ -n "${URL:-}" ]; then
             echo "url=$URL" >> "$GITHUB_OUTPUT"
-            echo "Portal URL: $URL"
+            echo "Frontend URL: $URL"
           fi
     environment:
       name: ${{ inputs.environment || 'Staging' }}
