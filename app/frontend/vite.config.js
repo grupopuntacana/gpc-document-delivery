@@ -33,7 +33,7 @@ export default defineConfig({
     closeBundle() {
       const zip = new AdmZip();
       zip.addLocalFolder('dist');
-      zip.writeZip('dist/portal.zip');
+      zip.writeZip('dist/frontend.zip');
     },
   }],
   server: {

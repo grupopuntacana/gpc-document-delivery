@@ -1,9 +1,9 @@
 {
   "_version": "1.49.0",
   "sap.app": {
-    "id": "gpc.documentdelivery.portal",
+    "id": "document-delivery.frontend",
     "applicationVersion": {
-      "version": "0.1.0"
+      "version": "1.0.0"
     },
     "type": "application",
     "title": "GPC Document Delivery Portal",

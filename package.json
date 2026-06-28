@@ -1,6 +1,6 @@
 {
-  "name": "gpc-document-delivery",
-  "version": "0.1.0",
+  "name": "document-delivery",
+  "version": "1.0.0",
   "description": "GPC Document Delivery — CAP app on BTP. Verifies HMAC sharing tokens and serves OpenText PDFs via CloudFront. Milestone 1: Credential Store + Destination Service spike.",
   "private": true,
   "dependencies": {
