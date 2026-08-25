@@ -16,7 +16,7 @@ modules:
     type: nodejs
     path: gen/srv
     properties:
-      OPENTEXT_FOLDER_ID: "52480"
+      OPENTEXT_FOLDER_ID: "5816"
       OPENTEXT_DELIVERY_MODE: "cdn"
       AWS_REGION: "us-east-1"
       S3_BUCKET: "opentext-cdn-cache-gpc"
