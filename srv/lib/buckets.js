@@ -14,12 +14,17 @@
  * tunables). Parsed lazily and memoized: a malformed config fails the request that needs
  * it, not the boot.
  *
- * Two errors, deliberately distinct — the handler maps them to different statuses:
+ * Three errors, deliberately distinct — the handler maps them to different statuses:
+ *   - `BUCKET_REQUIRED`       the caller omitted the field → 400 ("bucket is required")
  *   - `UNKNOWN_BUCKET`        the caller named a bucket we don't have → 400
  *   - `BUCKET_CONFIG_INVALID` the deployed config is broken → 500 (not the caller's fault)
  */
 
 const BUCKETS_ENV = 'OPENTEXT_BUCKETS';
+
+// The bucket name is caller-supplied and echoed into the 400; `bucket` carries no length
+// facet in the .cds, so bound how much of it can be reflected back.
+const MAX_NAME_IN_ERROR = 64;
 
 let _registry;
 
@@ -29,11 +34,17 @@ function configError(message) {
   return err;
 }
 
+function bucketRequired() {
+  const err = new Error('bucket is required');
+  err.code = 'BUCKET_REQUIRED';
+  return err;
+}
+
 function unknownBucket(name) {
   // Deliberately does NOT list the configured buckets: the message reaches an
   // authenticated caller as a 400, and enumerating other apps' namespaces would
   // undercut the isolation 0007 adds.
-  const err = new Error(`unknown bucket: ${JSON.stringify(String(name ?? ''))}`);
+  const err = new Error(`unknown bucket: ${JSON.stringify(name.slice(0, MAX_NAME_IN_ERROR))}`);
   err.code = 'UNKNOWN_BUCKET';
   return err;
 }
@@ -67,7 +78,13 @@ function registry() {
     }
     // 0006 will accept `{ parentNode, folderName }` here and self-provision the folder;
     // keep that branch behind resolveBucket() so the handler contract doesn't move.
-    const folderNode = Number(entry.folderNode);
+    //
+    // Type-check before coercing: Number(true) === 1 and Number([5816]) === 5816 would both
+    // sail through the isInteger check below and silently route documents to the wrong node.
+    const configured = entry.folderNode;
+    const isNumeric = typeof configured === 'number'
+      || (typeof configured === 'string' && /^\d+$/.test(configured.trim()));
+    const folderNode = isNumeric ? Number(configured) : NaN;
     if (!Number.isInteger(folderNode) || folderNode <= 0) {
       throw configError(
         `${BUCKETS_ENV}: bucket "${name}" has an invalid folderNode: ${JSON.stringify(entry.folderNode)}`,
@@ -83,11 +100,12 @@ function registry() {
  *
  * @param {string} name bucket name as supplied by the caller (opaque namespace)
  * @returns {{folderNode: number}} a fresh object — mutating it cannot corrupt the registry
- * @throws  `UNKNOWN_BUCKET` when unconfigured/missing, `BUCKET_CONFIG_INVALID` on bad config
+ * @throws  `BUCKET_REQUIRED` when absent/empty, `UNKNOWN_BUCKET` when unconfigured,
+ *          `BUCKET_CONFIG_INVALID` on bad config
  */
 function resolveBucket(name) {
   // Map lookup (not a plain object) so 'constructor'/'__proto__' are ordinary misses.
-  if (typeof name !== 'string' || !name.trim()) throw unknownBucket(name);
+  if (typeof name !== 'string' || !name.trim()) throw bucketRequired();
   const entry = registry().get(name);
   if (!entry) throw unknownBucket(name);
   return { ...entry };

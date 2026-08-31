@@ -58,7 +58,12 @@ module.exports = class IngestService extends cds.ApplicationService {
       } catch (err) {
         // A caller naming a bucket we don't have is a 400; a broken deployed config is
         // ours, not theirs — surface it as a 500 rather than blaming the request.
-        if (err.code === 'UNKNOWN_BUCKET') return req.reject(400, err.message);
+        // Log the 400s too: "uploads started failing" needs something to correlate against
+        // (0007 adds the caller's azp here, which is what makes this actionable).
+        if (err.code === 'BUCKET_REQUIRED' || err.code === 'UNKNOWN_BUCKET') {
+          LOG.warn(`upload rejected: ${err.message}`);
+          return req.reject(400, err.message);
+        }
         LOG.error('bucket registry misconfigured:', err.message);
         return req.reject(500, 'bucket registry is misconfigured');
       }

@@ -205,12 +205,14 @@ describe('IngestService.uploadDocument', () => {
 
     it('rejects a missing bucket with 400 — no silent fallback to the legacy folder', async () => {
       mockTransport();
-      await expect(
-        POST('/odata/v4/ingest/uploadDocument', {
-          fileName: 'invoice.pdf',
-          contentBase64: b64('%PDF-1.7 hello'),
-        }),
-      ).rejects.toMatchObject({ response: { status: 400 } });
+      const err = await POST('/odata/v4/ingest/uploadDocument', {
+        fileName: 'invoice.pdf',
+        contentBase64: b64('%PDF-1.7 hello'),
+      }).catch((e) => e);
+      expect(err.response.status).toBe(400);
+      // says the field is missing, not that a bucket named "" is unknown — matches the
+      // sibling `fileName is required` / `contentBase64 is required` guards
+      expect(err.response.data.error.message).toMatch(/bucket is required/);
       expect(opentext.deps.executeHttpRequest).not.toHaveBeenCalled();
     });
 
