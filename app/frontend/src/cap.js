@@ -39,6 +39,15 @@ function fileToBase64(file) {
   });
 }
 
+// Which bucket the portal writes to. Ingest routes each bucket to its own OpenText folder
+// and has no default (see srv/lib/buckets.js), so the portal must name one.
+//
+// IMPORTANT: this bucket's `folderNode` in OPENTEXT_BUCKETS must be the SAME folder the
+// portal lists from (`OPENTEXT_FOLDER_ID`, srv/portal-service.js) — otherwise an upload
+// succeeds but never shows up in the listing, which looks like a broken upload. Override
+// with VITE_INGEST_BUCKET at build time.
+const INGEST_BUCKET = import.meta.env.VITE_INGEST_BUCKET || 'invoices';
+
 // Upload a document via the authenticated ingest action. Returns { nodeId, name, token }.
 // The file rides as base64 in the JSON body (matches IngestService.uploadDocument).
 export async function uploadDocument(file) {
@@ -51,6 +60,7 @@ export async function uploadDocument(file) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify({
+      bucket: INGEST_BUCKET,
       // Camera captures and most files carry their own MIME; fall back to a generic binary
       // type (not PDF) when the browser can't determine it.
       fileName: file.name || 'upload',

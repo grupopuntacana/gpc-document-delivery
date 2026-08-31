@@ -162,16 +162,49 @@ open them by clicking. Three pieces:
   milestone swaps the handler body for a 302 → CloudFront signed URL without changing the
   URL contract.
 - **`IngestService.uploadDocument`** (`srv/ingest-service.{cds,js}`) — **authenticated**
-  action; the seed of the shared *ingest* group (ADR 0005). Takes `{ fileName, contentType,
-  contentBase64 }`, uploads a multipart type-144 node to OpenText over the Cloud Connector
-  (`opentext.uploadDocument`, the first **write** through the tunnel), de-duplicates the
-  filename Django-style (append an 8-hex UUID suffix on collision), and returns
-  `{ nodeId, name, token }`. Target folder from `OPENTEXT_INGEST_FOLDER_ID` (falls back to
-  `OPENTEXT_FOLDER_ID`, default `2000`) so an upload shows up in the portal listing on refresh.
+  action; the seed of the shared *ingest* group (ADR 0005). Takes `{ bucket, fileName,
+  contentType, contentBase64 }`, uploads a multipart type-144 node to OpenText over the
+  Cloud Connector (`opentext.uploadDocument`, the first **write** through the tunnel),
+  de-duplicates the filename Django-style (append an 8-hex UUID suffix on collision), and
+  returns `{ nodeId, name, token }`. The **`bucket`** selects the target folder via the
+  registry in `srv/lib/buckets.js` (`OPENTEXT_BUCKETS`) — see
+  [Bucket registry](#bucket-registry-opentext_buckets) below.
 - **Vue SPA** (`app/frontend/src/App.vue` + `cap.js`) — fetches `documents()`, renders the
   rows grouped (Facturas / Consumo / Otros), each with an **Open PDF** link to
   `/invoice/{token}`. A drag-and-drop **upload box** posts to `IngestService.uploadDocument`
   and refreshes the listing.
+
+### Bucket registry (`OPENTEXT_BUCKETS`)
+
+Ingest is **bucket-per-app** (task 0005): the caller names a `bucket` and the registry
+(`srv/lib/buckets.js`) maps it to the OpenText folder the document lands in. A bucket is an
+opaque namespace — it says *where* a document goes, never *what it means*.
+
+```bash
+OPENTEXT_BUCKETS='{"invoices":{"folderNode":5816},"statements":{"folderNode":5817}}'
+```
+
+Folder nodes are **pre-provisioned** — create the folder in OTCS and put its node id here
+(self-provisioning by name is task 0006). Rejections:
+
+| Case | Status | Why |
+|---|---|---|
+| bucket not in the registry | `400` | caller's mistake; the message does **not** list the configured buckets (no namespace enumeration) |
+| `bucket` missing from the body | `400` | there is **no** default folder — the registry is the only source of truth |
+| `OPENTEXT_BUCKETS` malformed | `500` | a broken deployed config is ours, not the caller's |
+
+Entries are validated eagerly on first use, so a typo in an unused bucket still surfaces on
+the first upload.
+
+> **The portal's bucket.** The SPA uploads to `invoices` (`app/frontend/src/cap.js`,
+> override at build time with `VITE_INGEST_BUCKET`). That bucket's `folderNode` must equal
+> **`OPENTEXT_FOLDER_ID`** — the portal *lists* from `OPENTEXT_FOLDER_ID` but *uploads*
+> through the registry, so if the two point at different nodes the upload succeeds and the
+> document never appears in the listing. Both default to the `5816` "Demo Documents" folder
+> in `.env.example`.
+
+Authorization — which caller may write which bucket — is **not** implemented yet: today any
+authenticated caller may name any configured bucket (task 0007).
 
 `srv/lib/token.js` is a byte-for-byte port of Python `src/token_redirect.py` — verified by
 cross-interop test (a token minted by either side validates on the other). Keep them in

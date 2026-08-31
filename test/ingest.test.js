@@ -10,6 +10,14 @@ const require = createRequire(import.meta.url);
 // client. SHARED_LINK_SECRET is needed so makeToken can mint the returned sharing token.
 process.env.SHARED_LINK_SECRET = 'x'.repeat(64);
 process.env.OPENTEXT_FOLDER_ID = '52480';
+// Two buckets on DIFFERENT folder nodes — the point of the slice is that each lands in its
+// own OpenText folder. Set before the service boots so the registry sees it.
+const INVOICES_FOLDER = 52480;
+const STATEMENTS_FOLDER = 52481;
+process.env.OPENTEXT_BUCKETS = JSON.stringify({
+  invoices: { folderNode: INVOICES_FOLDER },
+  statements: { folderNode: STATEMENTS_FOLDER },
+});
 
 const cds = require('@sap/cds');
 const opentext = require('../srv/lib/opentext.js');
@@ -33,14 +41,18 @@ describe('IngestService.uploadDocument', () => {
   });
 
   // Captures the create-node POST configs so tests can assert what was actually sent to OTCS
-  // (not just the response shape). `creates` collects each create-node cfg in call order.
+  // (not just the response shape). `creates` collects each create-node cfg in call order;
+  // `lists` collects the folder-listing GETs (the dedup read) so a test can assert WHICH
+  // folder was consulted, not just which one was written to.
   function mockTransport({ existingNames = [], newId = 9001 } = {}) {
     const creates = [];
+    const lists = [];
     opentext.deps.executeHttpRequest.mockImplementation(async (_dest, cfg) => {
       if (cfg.method === 'POST' && cfg.url.endsWith('/authentication/credentials')) {
         return { status: 200, data: { ticket: 'T' } };
       }
       if (cfg.method === 'GET') {
+        lists.push(cfg);
         return {
           status: 200,
           data: {
@@ -54,14 +66,20 @@ describe('IngestService.uploadDocument', () => {
       creates.push(cfg);
       return { status: 200, data: { results: { data: { properties: { id: newId } } } } };
     });
-    return { creates };
+    return { creates, lists };
   }
+
+  /** The `parent_id` the handler actually sent in the create-node multipart body. */
+  const parentIdOf = (cfg) => JSON.parse(
+    cfg.data.toString('utf8').match(/\{"parent_id".*?\}/)[0],
+  ).parent_id;
 
   const b64 = (s) => Buffer.from(s).toString('base64');
 
   it('uploads, returns nodeId + name + a token', async () => {
     mockTransport({ existingNames: [], newId: 9001 });
     const { data } = await POST('/odata/v4/ingest/uploadDocument', {
+      bucket: 'invoices',
       fileName: 'invoice.pdf',
       contentType: 'application/pdf',
       contentBase64: b64('%PDF-1.7 hello'),
@@ -74,6 +92,7 @@ describe('IngestService.uploadDocument', () => {
   it('de-duplicates a colliding filename with an 8-hex UUID suffix', async () => {
     const { creates } = mockTransport({ existingNames: ['invoice.pdf'], newId: 9002 });
     const { data } = await POST('/odata/v4/ingest/uploadDocument', {
+      bucket: 'invoices',
       fileName: 'invoice.pdf',
       contentBase64: b64('%PDF-1.7 hello'),
     });
@@ -90,6 +109,7 @@ describe('IngestService.uploadDocument', () => {
   it('defaults contentType to application/octet-stream when omitted', async () => {
     const { creates } = mockTransport({ newId: 9003 });
     await POST('/odata/v4/ingest/uploadDocument', {
+      bucket: 'invoices',
       fileName: 'invoice.pdf',
       contentBase64: b64('%PDF-1.7 hello'),
     });
@@ -99,6 +119,7 @@ describe('IngestService.uploadDocument', () => {
   it('accepts a non-PDF file (e.g. a camera photo) with its own content type', async () => {
     const { creates } = mockTransport({ newId: 9004 });
     const { data } = await POST('/odata/v4/ingest/uploadDocument', {
+      bucket: 'invoices',
       fileName: 'photo.jpg',
       contentType: 'image/jpeg',
       contentBase64: b64('\xFF\xD8\xFF fake-jpeg'),
@@ -111,7 +132,7 @@ describe('IngestService.uploadDocument', () => {
   it('rejects an empty file', async () => {
     mockTransport();
     await expect(
-      POST('/odata/v4/ingest/uploadDocument', { fileName: 'x.pdf', contentBase64: '' }),
+      POST('/odata/v4/ingest/uploadDocument', { bucket: 'invoices', fileName: 'x.pdf', contentBase64: '' }),
     ).rejects.toMatchObject({ response: { status: 400 } });
   });
 
@@ -128,9 +149,81 @@ describe('IngestService.uploadDocument', () => {
     });
     await expect(
       POST('/odata/v4/ingest/uploadDocument', {
+        bucket: 'invoices',
         fileName: 'invoice.pdf',
         contentBase64: b64('%PDF-1.7 hello'),
       }),
     ).rejects.toMatchObject({ response: { status: 502 } });
+  });
+
+  describe('bucket -> folder routing (0005)', () => {
+    it('routes two buckets to their own OpenText parent folders', async () => {
+      const a = mockTransport({ newId: 9101 });
+      await POST('/odata/v4/ingest/uploadDocument', {
+        bucket: 'invoices',
+        fileName: 'invoice.pdf',
+        contentBase64: b64('%PDF-1.7 hello'),
+      });
+      expect(parentIdOf(a.creates[0])).toBe(INVOICES_FOLDER);
+
+      const b = mockTransport({ newId: 9102 });
+      await POST('/odata/v4/ingest/uploadDocument', {
+        bucket: 'statements',
+        fileName: 'invoice.pdf',
+        contentBase64: b64('%PDF-1.7 hello'),
+      });
+      expect(parentIdOf(b.creates[0])).toBe(STATEMENTS_FOLDER);
+
+      // the whole point of the slice: same filename, different folders
+      expect(parentIdOf(a.creates[0])).not.toBe(parentIdOf(b.creates[0]));
+    });
+
+    it('de-duplicates within the named bucket, not the legacy folder', async () => {
+      // The dedup READ must consult the bucket's own folder — otherwise a name taken in
+      // one bucket would rename an upload in another.
+      const { lists } = mockTransport({ existingNames: [], newId: 9103 });
+      await POST('/odata/v4/ingest/uploadDocument', {
+        bucket: 'statements',
+        fileName: 'invoice.pdf',
+        contentBase64: b64('%PDF-1.7 hello'),
+      });
+      expect(lists[0].url).toContain(String(STATEMENTS_FOLDER));
+      expect(lists[0].url).not.toContain(String(INVOICES_FOLDER));
+    });
+
+    it('rejects an unknown bucket with 400 before any OpenText call', async () => {
+      mockTransport();
+      await expect(
+        POST('/odata/v4/ingest/uploadDocument', {
+          bucket: 'no-such-bucket',
+          fileName: 'invoice.pdf',
+          contentBase64: b64('%PDF-1.7 hello'),
+        }),
+      ).rejects.toMatchObject({ response: { status: 400 } });
+      expect(opentext.deps.executeHttpRequest).not.toHaveBeenCalled();
+    });
+
+    it('rejects a missing bucket with 400 — no silent fallback to the legacy folder', async () => {
+      mockTransport();
+      await expect(
+        POST('/odata/v4/ingest/uploadDocument', {
+          fileName: 'invoice.pdf',
+          contentBase64: b64('%PDF-1.7 hello'),
+        }),
+      ).rejects.toMatchObject({ response: { status: 400 } });
+      expect(opentext.deps.executeHttpRequest).not.toHaveBeenCalled();
+    });
+
+    it('does not name the configured buckets in the rejection', async () => {
+      // The 400 reaches an authenticated caller; listing other apps' namespaces would
+      // turn a typo into enumeration (0007 adds the write ACL).
+      mockTransport();
+      const err = await POST('/odata/v4/ingest/uploadDocument', {
+        bucket: 'no-such-bucket',
+        fileName: 'invoice.pdf',
+        contentBase64: b64('%PDF-1.7 hello'),
+      }).catch((e) => e);
+      expect(JSON.stringify(err.response.data)).not.toContain('statements');
+    });
   });
 });

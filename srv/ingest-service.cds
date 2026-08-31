@@ -10,14 +10,20 @@
  * deliver; ingest is a WRITE and must not be anonymous.
  *
  * The file rides in the JSON body as base64 (`contentBase64`) — simple and proxy-friendly
- * for the service-to-service seed; the demo drag-and-drop UI is the first client. doc-type
- * → folder routing and the per-caller ingest authorization model are deferred (ADR 0005).
+ * for the service-to-service seed; the demo drag-and-drop UI is the first client.
+ *
+ * Uploads are routed by **bucket**: the caller names a bucket and `srv/lib/buckets.js`
+ * maps it to the OpenText folder the document lands in (task 0005). The per-caller
+ * authorization model — which app may write which bucket — is still deferred (ADR 0005,
+ * task 0007): today any authenticated caller may name any configured bucket.
  */
 @path: 'ingest'
 service IngestService {
 
   @requires: 'authenticated-user'
   action uploadDocument(
+    bucket        : String,      // target bucket; an opaque namespace, resolved to an
+                                 // OpenText folder by the registry (never a domain concept)
     fileName      : String,      // original filename, e.g. 'invoice.pdf'
     contentType   : String,      // MIME type; defaults to application/pdf when omitted
     contentBase64 : LargeString  // the file bytes, base64-encoded
