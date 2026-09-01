@@ -3,17 +3,11 @@
 const crypto = require('crypto');
 const cds = require('@sap/cds');
 
+const buckets = require('./lib/buckets');
 const opentext = require('./lib/opentext');
 const token = require('./lib/token');
 
 const LOG = cds.log('ingest');
-
-// Where uploads land. Defaults to the portal folder so an uploaded document shows up in
-// the same listing (acceptance criterion: portal refresh shows the new doc). A dedicated
-// ingest folder can be set without code change; doc-type → folder routing is deferred.
-const FOLDER_ID = Number(
-  process.env.OPENTEXT_INGEST_FOLDER_ID || process.env.OPENTEXT_FOLDER_ID || 2000,
-);
 
 // Match the portal's short-lived token (demo used 7 days).
 const TOKEN_TTL_DAYS = Number(process.env.PORTAL_TOKEN_TTL_DAYS || 7);
@@ -49,9 +43,30 @@ async function uniqueName(folderId, fileName) {
 module.exports = class IngestService extends cds.ApplicationService {
   init() {
     this.on('uploadDocument', async (req) => {
-      const { fileName, contentType, contentBase64 } = req.data;
+      const {
+        bucket, fileName, contentType, contentBase64,
+      } = req.data;
       if (!fileName) return req.reject(400, 'fileName is required');
       if (!contentBase64) return req.reject(400, 'contentBase64 is required');
+
+      // Resolve the target folder BEFORE touching OpenText: an unknown bucket must cost
+      // nothing. There is no fallback folder — the registry is the only source of truth
+      // for where a document lands.
+      let folderNode;
+      try {
+        ({ folderNode } = buckets.resolveBucket(bucket));
+      } catch (err) {
+        // A caller naming a bucket we don't have is a 400; a broken deployed config is
+        // ours, not theirs — surface it as a 500 rather than blaming the request.
+        // Log the 400s too: "uploads started failing" needs something to correlate against
+        // (0007 adds the caller's azp here, which is what makes this actionable).
+        if (err.code === 'BUCKET_REQUIRED' || err.code === 'UNKNOWN_BUCKET') {
+          LOG.warn(`upload rejected: ${err.message}`);
+          return req.reject(400, err.message);
+        }
+        LOG.error('bucket registry misconfigured:', err.message);
+        return req.reject(500, 'bucket registry is misconfigured');
+      }
 
       // Buffer.from(.,'base64') silently drops invalid chars, so an all-whitespace/symbol
       // string decodes to zero bytes — hence "empty or undecodable" (we don't distinguish).
@@ -64,15 +79,18 @@ module.exports = class IngestService extends cds.ApplicationService {
       try {
         // Sanitize before dedup/storage/response so the returned name == the stored name and
         // can't break the multipart framing (shared rule with the download path).
-        const name = await uniqueName(FOLDER_ID, opentext.sanitizeFileName(fileName));
+        const name = await uniqueName(folderNode, opentext.sanitizeFileName(fileName));
         const nodeId = await opentext.uploadDocument(
-          FOLDER_ID,
+          folderNode,
           buffer,
           name,
           contentType || 'application/octet-stream',
         );
         const tok = await token.makeToken(nodeId, { ttlDays: TOKEN_TTL_DAYS });
-        LOG.info(`uploaded "${fileName}" as "${name}" -> node ${nodeId} (${buffer.length} bytes)`);
+        LOG.info(
+          `uploaded "${fileName}" as "${name}" -> node ${nodeId} `
+            + `in bucket "${bucket}" (folder ${folderNode}, ${buffer.length} bytes)`,
+        );
         return { nodeId, name, token: tok };
       } catch (err) {
         const reason = opentext.describeError(err);

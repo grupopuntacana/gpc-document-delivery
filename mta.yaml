@@ -17,6 +17,11 @@ modules:
     path: gen/srv
     properties:
       OPENTEXT_FOLDER_ID: "5816"
+      # Ingest has no default folder — an unset registry rejects every upload with 400.
+      # The portal SPA writes to `invoices`, so its folderNode must stay equal to
+      # OPENTEXT_FOLDER_ID above (the portal lists from that node; a mismatch means an
+      # upload succeeds but never shows up in the listing).
+      OPENTEXT_BUCKETS: '{"invoices":{"folderNode":5816}}'
       OPENTEXT_DELIVERY_MODE: "cdn"
       AWS_REGION: "us-east-1"
       S3_BUCKET: "opentext-cdn-cache-gpc"
