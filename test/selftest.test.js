@@ -220,6 +220,105 @@ describe('opentext.uploadDocument', () => {
     const names = await opentext.listFolderChildNames(52480);
     expect(names).toEqual(['invoice.pdf', 'a-subfolder']);
   });
+
+  it('listFolderChildren keeps the id and type of every child', async () => {
+    // findOrCreateFolder needs both: the id to reuse an existing folder, the type to tell a
+    // folder from a same-named document. listFolderChildNames is built on top of this.
+    opentext.deps.executeHttpRequest.mockImplementation(async (_dest, cfg) => {
+      if (cfg.method === 'POST') return { status: 200, data: { ticket: 'T' } };
+      return {
+        status: 200,
+        data: {
+          results: [
+            { data: { properties: { id: 1, name: 'invoice.pdf', type: 144 } } },
+            { data: { properties: { id: 2, name: 'a-subfolder', type: 0 } } },
+          ],
+        },
+      };
+    });
+
+    expect(await opentext.listFolderChildren(52480)).toEqual([
+      { id: 1, name: 'invoice.pdf', type: 144 },
+      { id: 2, name: 'a-subfolder', type: 0 },
+    ]);
+  });
+});
+
+describe('opentext.createFolder / findOrCreateFolder (0006)', () => {
+  const opentext = require('../srv/lib/opentext.js');
+
+  beforeEach(() => {
+    opentext.clearTicketCache();
+    opentext.deps.getDestination = vi.fn(async () => ({ username: 'Admin', password: 'secret' }));
+    opentext.deps.executeHttpRequest = vi.fn();
+  });
+
+  /** Route auth / list / create-node, returning `children` from any GET. */
+  function mockOtcs({ children = [], newId = 60001 } = {}) {
+    opentext.deps.executeHttpRequest.mockImplementation(async (_dest, cfg) => {
+      if (cfg.method === 'POST' && cfg.url.endsWith('/authentication/credentials')) {
+        return { status: 200, data: { ticket: 'TICKET-1' } };
+      }
+      if (cfg.method === 'GET') {
+        return {
+          status: 200,
+          data: { results: children.map((c) => ({ data: { properties: c } })) },
+        };
+      }
+      return { status: 200, data: { results: { data: { properties: { id: newId } } } } };
+    });
+  }
+
+  const createCalls = () => opentext.deps.executeHttpRequest.mock.calls.filter(
+    ([, c]) => c.method === 'POST' && c.url === opentext.OTCS_NODES_PATH,
+  );
+
+  it('createFolder POSTs a type-0 multipart create-node and returns the new id', async () => {
+    mockOtcs({ newId: 60123 });
+
+    expect(await opentext.createFolder(5816, 'statements')).toBe(60123);
+
+    const [post] = createCalls();
+    expect(post).toBeTruthy();
+    expect(post[1].headers.OTDSTicket).toBe('TICKET-1');
+    expect(String(post[1].headers['content-type'])).toMatch(/^multipart\/form-data; boundary=/);
+    expect(Buffer.isBuffer(post[1].data)).toBe(true);
+    const payload = post[1].data.toString('utf8');
+    expect(payload).toContain('name="body"');
+    expect(payload).toContain('"parent_id":5816');
+    expect(payload).toContain('"type":0');
+    expect(payload).toContain('"name":"statements"');
+    // no file part — a folder has no content
+    expect(payload).not.toContain('name="file"');
+    // same CSRF rule as the upload: off, via the SDK's third options arg
+    expect(post[2]).toMatchObject({ fetchCsrfToken: false });
+  });
+
+  it('findOrCreateFolder returns an existing folder id without creating anything', async () => {
+    mockOtcs({ children: [{ id: 60200, name: 'statements', type: 0 }] });
+
+    expect(await opentext.findOrCreateFolder(5816, 'statements')).toBe(60200);
+    expect(createCalls()).toHaveLength(0);
+  });
+
+  it('findOrCreateFolder creates the folder when the parent has no such child', async () => {
+    mockOtcs({ children: [{ id: 60201, name: 'something-else', type: 0 }], newId: 60202 });
+
+    expect(await opentext.findOrCreateFolder(5816, 'statements')).toBe(60202);
+    expect(createCalls()).toHaveLength(1);
+  });
+
+  it('rejects a same-named child that is not a folder instead of uploading into it', async () => {
+    // A document named "statements" is not a usable parent_id: uploading under it fails
+    // opaquely and late, so fail here with something diagnosable.
+    mockOtcs({ children: [{ id: 60203, name: 'statements', type: 144 }] });
+
+    const err = await opentext.findOrCreateFolder(5816, 'statements').catch((e) => e);
+    expect(err.code).toBe('FOLDER_PROVISION_FAILED');
+    expect(err.message).toMatch(/60203/);
+    expect(err.message).toMatch(/not a folder/);
+    expect(createCalls()).toHaveLength(0);
+  });
 });
 
 describe('opentext.extractNodeId', () => {

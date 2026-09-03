@@ -68,8 +68,10 @@ const otcsAgents = makeAgents();
 const OTDS_AUTH_PATH = '/otdsws/v1/authentication/credentials';
 const OTCS_NODES_PATH = '/otcs/cs.exe/api/v2/nodes';
 
-// OTCS node subtype for a document (validated CE 25.4, mirrors src/opentext_client.py).
+// OTCS node subtypes (validated CE 25.4, mirrors src/opentext_client.py). Folder is 0 —
+// see the `addable_types` capture in docs/endpoint-discovery.md.
 const NODE_TYPE_DOCUMENT = 144;
+const NODE_TYPE_FOLDER = 0;
 
 // The folder-list call dominates a listing (~1.9s, measured). By default OTCS v2
 // returns every property plus per-node `actions`/permission expansions, which the
@@ -387,17 +389,29 @@ async function getNodeName(nodeId) {
 }
 
 /**
+ * Return every child of a folder — documents AND folders — as `{id, name, type}`. Unlike
+ * `listFolder` this does not filter by type: callers decide what they are looking for
+ * (dedup wants all names, folder resolution wants a type-0 match by name).
+ * @returns {Promise<Array<{id:number, name:string, type:number}>>}
+ */
+async function listFolderChildren(folderId) {
+  let url = `${OTCS_NODES_PATH}/${folderId}/nodes`;
+  if (LIST_FIELDS) url += `?fields=${encodeURIComponent(LIST_FIELDS)}`;
+  const res = await withTicket((ticket) => otcsRequest(ticket, { method: 'GET', url }));
+  return flattenChildren(res.data)
+    .filter((c) => c)
+    .map((c) => ({ id: Number(c.id), name: c.name, type: Number(c.type) }));
+}
+
+/**
  * Return the raw names of every child of a folder (documents AND folders), used for
  * upload dedup. Unlike `listFolder` this does NOT filter to type-144 — a collision is a
  * collision regardless of node type (mirrors demo/server.py building `existing_names`).
  * @returns {Promise<string[]>}
  */
 async function listFolderChildNames(folderId) {
-  let url = `${OTCS_NODES_PATH}/${folderId}/nodes`;
-  if (LIST_FIELDS) url += `?fields=${encodeURIComponent(LIST_FIELDS)}`;
-  const res = await withTicket((ticket) => otcsRequest(ticket, { method: 'GET', url }));
-  return flattenChildren(res.data)
-    .map((c) => c && c.name)
+  return (await listFolderChildren(folderId))
+    .map((c) => c.name)
     .filter((n) => typeof n === 'string' && n.length > 0);
 }
 
@@ -468,6 +482,66 @@ async function uploadDocument(parentFolderId, fileBuffer, name, contentType = 'a
   return extractNodeId(res.data);
 }
 
+/**
+ * Create a type-0 Folder under `parentNode`. Same create-node call as `uploadDocument`
+ * minus the `file` part: OTCS still wants multipart with a non-empty string `body`, so the
+ * framing (Buffer, form headers, NO_CSRF, inside `withTicket`) is identical — see
+ * `uploadDocument` for why each of those is load-bearing.
+ * @returns {Promise<number>} the new folder's node id
+ */
+async function createFolder(parentNode, name) {
+  const safeName = sanitizeFileName(name);
+  const bodyJson = JSON.stringify({
+    parent_id: Number(parentNode),
+    type: NODE_TYPE_FOLDER,
+    name: safeName,
+  });
+  const res = await withTicket((ticket) => {
+    const form = new FormData();
+    form.append('body', bodyJson);
+    return otcsRequest(
+      ticket,
+      {
+        method: 'POST',
+        url: OTCS_NODES_PATH,
+        data: form.getBuffer(),
+        headers: form.getHeaders(),
+      },
+      NO_CSRF,
+    );
+  });
+  return extractNodeId(res.data);
+}
+
+/**
+ * Resolve `parentNode`'s child folder named `name`, creating it when absent (task 0006).
+ *
+ * A same-named child that is NOT a folder is a hard error rather than a match: uploading
+ * with `parent_id` pointing at a document fails opaquely and late, so fail here with
+ * something diagnosable. Note this filters by type where `listFolderChildNames` deliberately
+ * does not — dedup cares about name collisions of any type, this cares about finding a folder.
+ *
+ * Callers are expected to memoize (see `srv/lib/buckets.js`): this issues a list on every
+ * call and races under concurrency — two simultaneous misses would both create.
+ * @returns {Promise<number>} the existing or newly created folder's node id
+ */
+async function findOrCreateFolder(parentNode, name) {
+  const children = await listFolderChildren(parentNode);
+  const match = children.find((c) => c.name === name);
+  if (match) {
+    if (match.type !== NODE_TYPE_FOLDER) {
+      const err = new Error(
+        `cannot use "${name}" under node ${parentNode}: node ${match.id} has that name `
+          + `but is type ${match.type}, not a folder (${NODE_TYPE_FOLDER})`,
+      );
+      err.code = 'FOLDER_PROVISION_FAILED';
+      throw err;
+    }
+    return match.id;
+  }
+  return createFolder(parentNode, name);
+}
+
 const YEAR_PREFIX = /^\d{4}-\d{2}-/;
 
 /**
@@ -522,7 +596,10 @@ module.exports = {
   pingNode,
   listFolder,
   listFolderChildNames,
+  listFolderChildren,
   uploadDocument,
+  createFolder,
+  findOrCreateFolder,
   downloadDocument,
   downloadFileName,
   extensionForType,
@@ -533,6 +610,7 @@ module.exports = {
   categorize,
   describeError,
   NODE_TYPE_DOCUMENT,
+  NODE_TYPE_FOLDER,
   // exported for unit tests
   extractNodeId,
   deps,

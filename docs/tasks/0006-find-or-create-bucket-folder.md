@@ -1,6 +1,6 @@
 # 0006 — Find-or-create a bucket's OpenText folder (self-provisioning)
 
-**Status:** todo
+**Status:** done
 **Depends on:** [0005](0005-bucket-model-folder-routing.md).
 **Priority:** optional / deferrable — 0005 + 0007 already ship multi-app upload against
 **pre-provisioned** folder nodes. This slice removes the manual provisioning step; skip it if
@@ -23,30 +23,35 @@ proven upload call — not new transport.
 
 ## Acceptance criteria
 
-- [ ] `findOrCreateFolder(parentNode, name)` returns the node id, **creating** a type-0 folder
+- [x] `findOrCreateFolder(parentNode, name)` returns the node id, **creating** a type-0 folder
       when none of `parentNode`'s children match `name`, and **returning the existing** id when
       one does (no duplicate folder on the second call).
-- [ ] A bucket configured with `{ parentNode, folderName }` (no explicit `folderNode`) resolves
+- [x] A bucket configured with `{ parentNode, folderName }` (no explicit `folderNode`) resolves
       to a real folder id on first upload; a second upload to the same bucket reuses it —
       assert exactly one create-node POST across two uploads.
-- [ ] Create failure surfaces as a `502` via `describeError`, like the upload path.
+- [x] Create failure surfaces as a `502` via `describeError`, like the upload path.
 
 ## Checklist
 
 ### OpenText op — `srv/lib/opentext.js`
-- [ ] `createFolder(parentNode, name)`: `POST {OTCS}.../api/v2/nodes` multipart, `body` =
+- [x] `createFolder(parentNode, name)`: `POST {OTCS}.../api/v2/nodes` multipart, `body` =
       `{ parent_id, type: 0, name }`; return `extractNodeId(res.data)`. Mirror `uploadDocument`'s
       framing (Buffer, `form.getHeaders()`, `NO_CSRF`, `withTicket`).
-- [ ] `findOrCreateFolder(parentNode, name)`: reuse `listFolderChildNames(parentNode)` to detect
+- [x] `findOrCreateFolder(parentNode, name)`: reuse `listFolderChildNames(parentNode)` to detect
       an existing child by name; create only on miss. Export both.
 
 ### Registry — `srv/lib/buckets.js`
-- [ ] Allow a bucket entry to specify `{ parentNode, folderName }`; resolve it through
+- [x] Allow a bucket entry to specify `{ parentNode, folderName }`; resolve it through
       `findOrCreateFolder` (memoize the resolved id per bucket to avoid a list on every upload).
+      *`resolveBucket()` is now **async**. The memo caches the promise, not the id, so a
+      concurrent burst on a cold bucket shares one create; a rejection is dropped so the next
+      upload retries. Config specifying both shapes — or neither — is `BUCKET_CONFIG_INVALID`.
+      Every resolution failure is tagged `FOLDER_PROVISION_FAILED` so the handler answers 502
+      (upstream) rather than 500 (our config).*
 
 ### Tests — `test/ingest.test.js` / an opentext unit test
-- [ ] Existing folder → no create POST, returns existing id. Missing → one create POST, type 0.
-- [ ] Two uploads to a name-configured bucket → exactly one folder-create.
+- [x] Existing folder → no create POST, returns existing id. Missing → one create POST, type 0.
+- [x] Two uploads to a name-configured bucket → exactly one folder-create.
 
 ## Definition of Done (commons `cross-cutting.md` §1)
 - **DoD-4:** the registry still speaks only `bucket → folder`; folder *names* are config, never
