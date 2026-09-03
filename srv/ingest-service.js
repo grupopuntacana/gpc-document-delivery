@@ -49,12 +49,13 @@ module.exports = class IngestService extends cds.ApplicationService {
       if (!fileName) return req.reject(400, 'fileName is required');
       if (!contentBase64) return req.reject(400, 'contentBase64 is required');
 
-      // Resolve the target folder BEFORE touching OpenText: an unknown bucket must cost
-      // nothing. There is no fallback folder — the registry is the only source of truth
-      // for where a document lands.
+      // Resolve the target folder BEFORE reading the payload: an unknown bucket must cost
+      // nothing (both caller-blaming rejections below are decided by a sync Map lookup, so
+      // they still make zero OpenText calls). There is no fallback folder — the registry is
+      // the only source of truth for where a document lands.
       let folderNode;
       try {
-        ({ folderNode } = buckets.resolveBucket(bucket));
+        ({ folderNode } = await buckets.resolveBucket(bucket));
       } catch (err) {
         // A caller naming a bucket we don't have is a 400; a broken deployed config is
         // ours, not theirs — surface it as a 500 rather than blaming the request.
@@ -63,6 +64,13 @@ module.exports = class IngestService extends cds.ApplicationService {
         if (err.code === 'BUCKET_REQUIRED' || err.code === 'UNKNOWN_BUCKET') {
           LOG.warn(`upload rejected: ${err.message}`);
           return req.reject(400, err.message);
+        }
+        // A self-provisioned bucket whose folder OpenText won't resolve or create is an
+        // upstream failure, not a bad config — same 502 the upload path gives (0006).
+        if (err.code === 'FOLDER_PROVISION_FAILED') {
+          const reason = opentext.describeError(err);
+          LOG.error('folder provisioning failed:', reason);
+          return req.reject(502, `OpenText folder provisioning failed: ${reason}`);
         }
         LOG.error('bucket registry misconfigured:', err.message);
         return req.reject(500, 'bucket registry is misconfigured');

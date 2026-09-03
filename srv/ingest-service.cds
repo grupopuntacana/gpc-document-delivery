@@ -13,7 +13,9 @@
  * for the service-to-service seed; the demo drag-and-drop UI is the first client.
  *
  * Uploads are routed by **bucket**: the caller names a bucket and `srv/lib/buckets.js`
- * maps it to the OpenText folder the document lands in (task 0005). The per-caller
+ * maps it to the OpenText folder the document lands in (task 0005). A bucket configured
+ * with a parent node + folder name creates that folder on its first upload instead of
+ * requiring one provisioned by hand (task 0006). The per-caller
  * authorization model — which app may write which bucket — is still deferred (ADR 0005,
  * task 0007): today any authenticated caller may name any configured bucket.
  */

@@ -14,13 +14,19 @@ process.env.OPENTEXT_FOLDER_ID = '52480';
 // own OpenText folder. Set before the service boots so the registry sees it.
 const INVOICES_FOLDER = 52480;
 const STATEMENTS_FOLDER = 52481;
+// A third bucket names a parent + folder name instead of a folder node: it self-provisions
+// its folder on first upload (0006). Same registry, different shape.
+const ARCHIVE_PARENT = 5816;
+const ARCHIVE_NAME = 'archive';
 process.env.OPENTEXT_BUCKETS = JSON.stringify({
   invoices: { folderNode: INVOICES_FOLDER },
   statements: { folderNode: STATEMENTS_FOLDER },
+  archive: { parentNode: ARCHIVE_PARENT, folderName: ARCHIVE_NAME },
 });
 
 const cds = require('@sap/cds');
 const opentext = require('../srv/lib/opentext.js');
+const buckets = require('../srv/lib/buckets.js');
 
 const { GET, POST, axios } = cds.test(process.cwd());
 // Anonymous test client — the service requires an authenticated user; cds mock auth accepts
@@ -41,12 +47,22 @@ describe('IngestService.uploadDocument', () => {
   });
 
   // Captures the create-node POST configs so tests can assert what was actually sent to OTCS
-  // (not just the response shape). `creates` collects each create-node cfg in call order;
-  // `lists` collects the folder-listing GETs (the dedup read) so a test can assert WHICH
-  // folder was consulted, not just which one was written to.
-  function mockTransport({ existingNames = [], newId = 9001 } = {}) {
+  // (not just the response shape). Creates are split by node type: `creates` holds the
+  // document creates (type 144), `folderCreates` the folder ones (type 0, from 0006's
+  // self-provisioning) — otherwise "exactly one folder create" would be unassertable.
+  // `lists` collects the folder-listing GETs (the dedup read, and 0006's parent lookup) so a
+  // test can assert WHICH folder was consulted, not just which one was written to.
+  //
+  // `existingNames` is the type-144 shorthand the dedup tests use; `existingChildren` takes
+  // full `{id, name, type}` records for tests that need a folder child.
+  function mockTransport({
+    existingNames = [], existingChildren = null, newId = 9001, folderId = 9500,
+  } = {}) {
     const creates = [];
+    const folderCreates = [];
     const lists = [];
+    const children = existingChildren
+      || existingNames.map((name, i) => ({ id: 100 + i, name, type: 144 }));
     opentext.deps.executeHttpRequest.mockImplementation(async (_dest, cfg) => {
       if (cfg.method === 'POST' && cfg.url.endsWith('/authentication/credentials')) {
         return { status: 200, data: { ticket: 'T' } };
@@ -55,18 +71,19 @@ describe('IngestService.uploadDocument', () => {
         lists.push(cfg);
         return {
           status: 200,
-          data: {
-            results: existingNames.map((name, i) => ({
-              data: { properties: { id: 100 + i, name, type: 144 } },
-            })),
-          },
+          data: { results: children.map((c) => ({ data: { properties: c } })) },
         };
       }
-      // create-node
+      // create-node — route on the type in the multipart `body` field
+      const isFolder = /"type":0[,}]/.test(cfg.data.toString('utf8'));
+      if (isFolder) {
+        folderCreates.push(cfg);
+        return { status: 200, data: { results: { data: { properties: { id: folderId } } } } };
+      }
       creates.push(cfg);
       return { status: 200, data: { results: { data: { properties: { id: newId } } } } };
     });
-    return { creates, lists };
+    return { creates, folderCreates, lists };
   }
 
   /** The `parent_id` the handler actually sent in the create-node multipart body. */
@@ -226,6 +243,89 @@ describe('IngestService.uploadDocument', () => {
         contentBase64: b64('%PDF-1.7 hello'),
       }).catch((e) => e);
       expect(JSON.stringify(err.response.data)).not.toContain('statements');
+    });
+  });
+
+  describe('bucket self-provisioning (0006)', () => {
+    // The resolved folder id is memoized for the process lifetime, so each test starts from
+    // a cold registry — otherwise the first test's folder would leak into the rest.
+    beforeEach(() => {
+      buckets.clearRegistryCache();
+    });
+
+    const upload = (bucket, fileName = 'invoice.pdf') => POST('/odata/v4/ingest/uploadDocument', {
+      bucket,
+      fileName,
+      contentBase64: b64('%PDF-1.7 hello'),
+    });
+
+    it('creates the folder under its parent, then uploads into it', async () => {
+      const { creates, folderCreates } = mockTransport({ folderId: 9500, newId: 9201 });
+      await upload('archive');
+
+      expect(folderCreates).toHaveLength(1);
+      const folderBody = folderCreates[0].data.toString('utf8');
+      expect(parentIdOf(folderCreates[0])).toBe(ARCHIVE_PARENT);
+      expect(folderBody).toContain('"type":0');
+      expect(folderBody).toContain(`"name":"${ARCHIVE_NAME}"`);
+      // the document lands in the folder we just created, not in its parent
+      expect(parentIdOf(creates[0])).toBe(9500);
+    });
+
+    it('creates the folder exactly once across two uploads (AC-2)', async () => {
+      const { creates, folderCreates } = mockTransport({ folderId: 9501, newId: 9202 });
+      await upload('archive', 'a.pdf');
+      await upload('archive', 'b.pdf');
+
+      expect(folderCreates).toHaveLength(1);
+      expect(creates).toHaveLength(2);
+      expect(creates.map(parentIdOf)).toEqual([9501, 9501]);
+    });
+
+    it('reuses an existing folder instead of creating a duplicate', async () => {
+      const { creates, folderCreates } = mockTransport({
+        existingChildren: [{ id: 9600, name: ARCHIVE_NAME, type: 0 }],
+        newId: 9203,
+      });
+      await upload('archive');
+
+      expect(folderCreates).toHaveLength(0);
+      expect(parentIdOf(creates[0])).toBe(9600);
+    });
+
+    it('502s when the folder create fails', async () => {
+      opentext.deps.executeHttpRequest.mockImplementation(async (_dest, cfg) => {
+        if (cfg.method === 'POST' && cfg.url.endsWith('/authentication/credentials')) {
+          return { status: 200, data: { ticket: 'T' } };
+        }
+        if (cfg.method === 'GET') return { status: 200, data: { results: [] } };
+        const err = new Error('OTCS refused the create');
+        err.response = { status: 403, data: { error: 'no permission' } };
+        throw err;
+      });
+
+      const err = await upload('archive').catch((e) => e);
+      // an upstream refusal is OpenText's fault, not the deployment's — never a 500
+      expect(err.response.status).toBe(502);
+      expect(err.response.data.error.message).toMatch(/folder provisioning failed/i);
+    });
+
+    it('502s rather than uploading into a same-named document', async () => {
+      const { creates } = mockTransport({
+        existingChildren: [{ id: 9700, name: ARCHIVE_NAME, type: 144 }],
+      });
+
+      const err = await upload('archive').catch((e) => e);
+      expect(err.response.status).toBe(502);
+      expect(creates).toHaveLength(0);
+    });
+
+    it('a folderNode bucket still creates no folder (0005 unaffected)', async () => {
+      const { creates, folderCreates } = mockTransport({ newId: 9204 });
+      await upload('invoices');
+
+      expect(folderCreates).toHaveLength(0);
+      expect(parentIdOf(creates[0])).toBe(INVOICES_FOLDER);
     });
   });
 });

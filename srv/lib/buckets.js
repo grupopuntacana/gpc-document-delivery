@@ -5,20 +5,30 @@
  * mapping"). A bucket is an **opaque namespace**, never a context concept: the registry
  * knows where a document lands, not what it means (commons DoD-4).
  *
- * Config only — no OpenText calls. Entries come from `OPENTEXT_BUCKETS`, a JSON map:
+ * Entries come from `OPENTEXT_BUCKETS`, a JSON map. A bucket names its target folder one
+ * of two ways — exactly one, never both:
  *
- *   OPENTEXT_BUCKETS='{"invoices":{"folderNode":52480},"statements":{"folderNode":52481}}'
+ *   OPENTEXT_BUCKETS='{
+ *     "invoices":   {"folderNode": 52480},                          // pre-provisioned
+ *     "statements": {"parentNode": 5816, "folderName": "statements"} // self-provisioned
+ *   }'
+ *
+ * `folderNode` points at a folder an operator created by hand. `parentNode` + `folderName`
+ * lets the bucket create its own folder on first use (task 0006) — no OpenText click-ops
+ * per new bucket. Folder *names* are config, never derived from a request body (DoD-4).
  *
  * Env rather than a checked-in map so each BTP space points its buckets at its own
- * pre-provisioned folder nodes without a redeploy (matching the other `OPENTEXT_*`
- * tunables). Parsed lazily and memoized: a malformed config fails the request that needs
- * it, not the boot.
+ * folder nodes without a redeploy (matching the other `OPENTEXT_*` tunables). Parsed
+ * lazily and memoized: a malformed config fails the request that needs it, not the boot.
  *
- * Three errors, deliberately distinct — the handler maps them to different statuses:
- *   - `BUCKET_REQUIRED`       the caller omitted the field → 400 ("bucket is required")
- *   - `UNKNOWN_BUCKET`        the caller named a bucket we don't have → 400
- *   - `BUCKET_CONFIG_INVALID` the deployed config is broken → 500 (not the caller's fault)
+ * Four errors, deliberately distinct — the handler maps them to different statuses:
+ *   - `BUCKET_REQUIRED`         the caller omitted the field → 400 ("bucket is required")
+ *   - `UNKNOWN_BUCKET`          the caller named a bucket we don't have → 400
+ *   - `BUCKET_CONFIG_INVALID`   the deployed config is broken → 500 (not the caller's fault)
+ *   - `FOLDER_PROVISION_FAILED` OpenText refused to resolve/create the folder → 502
  */
+
+const opentext = require('./opentext');
 
 const BUCKETS_ENV = 'OPENTEXT_BUCKETS';
 
@@ -27,6 +37,12 @@ const BUCKETS_ENV = 'OPENTEXT_BUCKETS';
 const MAX_NAME_IN_ERROR = 64;
 
 let _registry;
+
+// bucket -> Promise<number> for self-provisioned entries. The *promise* is cached, not the
+// id, so a concurrent burst on a cold bucket shares one find-or-create instead of racing
+// two creates. No TTL: if someone deletes the folder in OpenText by hand, the memoized id
+// points at a dead node until the process restarts. Acceptable for this slice.
+let _folderPromises = new Map();
 
 function configError(message) {
   const err = new Error(message);
@@ -50,6 +66,23 @@ function unknownBucket(name) {
 }
 
 /**
+ * Validate a configured node id. Type-check before coercing: `Number(true) === 1` and
+ * `Number([5816]) === 5816` would both sail through the isInteger check and silently route
+ * documents to the wrong node.
+ */
+function nodeId(bucket, field, configured) {
+  const isNumeric = typeof configured === 'number'
+    || (typeof configured === 'string' && /^\d+$/.test(configured.trim()));
+  const n = isNumeric ? Number(configured) : NaN;
+  if (!Number.isInteger(n) || n <= 0) {
+    throw configError(
+      `${BUCKETS_ENV}: bucket "${bucket}" has an invalid ${field}: ${JSON.stringify(configured)}`,
+    );
+  }
+  return n;
+}
+
+/**
  * Parse + validate `OPENTEXT_BUCKETS` once. Validation is eager over every entry so a
  * typo in an unused bucket still surfaces on the first upload, not weeks later.
  */
@@ -69,51 +102,92 @@ function registry() {
     throw configError(`${BUCKETS_ENV} is not valid JSON: ${e.message}`);
   }
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw configError(`${BUCKETS_ENV} must be a JSON object of bucket -> { folderNode }`);
+    throw configError(`${BUCKETS_ENV} must be a JSON object of bucket -> { folderNode | parentNode + folderName }`);
   }
 
   _registry = new Map(Object.entries(parsed).map(([name, entry]) => {
     if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
-      throw configError(`${BUCKETS_ENV}: bucket "${name}" must be an object with a folderNode`);
+      throw configError(`${BUCKETS_ENV}: bucket "${name}" must be an object naming its target folder`);
     }
-    // 0006 will accept `{ parentNode, folderName }` here and self-provision the folder;
-    // keep that branch behind resolveBucket() so the handler contract doesn't move.
-    //
-    // Type-check before coercing: Number(true) === 1 and Number([5816]) === 5816 would both
-    // sail through the isInteger check below and silently route documents to the wrong node.
-    const configured = entry.folderNode;
-    const isNumeric = typeof configured === 'number'
-      || (typeof configured === 'string' && /^\d+$/.test(configured.trim()));
-    const folderNode = isNumeric ? Number(configured) : NaN;
-    if (!Number.isInteger(folderNode) || folderNode <= 0) {
+    // A bucket points at its folder exactly one way. Accepting both would need a silent
+    // precedence rule, and a bucket routing somewhere other than the obvious reading of
+    // its config is a latent routing bug — so reject the ambiguity outright.
+    const hasFolderNode = entry.folderNode !== undefined;
+    const hasSelfProvision = entry.parentNode !== undefined || entry.folderName !== undefined;
+    if (hasFolderNode && hasSelfProvision) {
       throw configError(
-        `${BUCKETS_ENV}: bucket "${name}" has an invalid folderNode: ${JSON.stringify(entry.folderNode)}`,
+        `${BUCKETS_ENV}: bucket "${name}" must specify either folderNode or `
+          + 'parentNode + folderName, not both',
       );
     }
-    return [name, { folderNode }];
+    if (!hasFolderNode && !hasSelfProvision) {
+      throw configError(
+        `${BUCKETS_ENV}: bucket "${name}" must specify a folderNode or parentNode + folderName`,
+      );
+    }
+
+    if (hasFolderNode) {
+      return [name, { folderNode: nodeId(name, 'folderNode', entry.folderNode) }];
+    }
+
+    const folderName = typeof entry.folderName === 'string' ? entry.folderName.trim() : '';
+    if (!folderName) {
+      throw configError(
+        `${BUCKETS_ENV}: bucket "${name}" has an invalid folderName: ${JSON.stringify(entry.folderName)}`,
+      );
+    }
+    return [name, { parentNode: nodeId(name, 'parentNode', entry.parentNode), folderName }];
   }));
   return _registry;
 }
 
 /**
- * Resolve a bucket name to its OpenText target folder.
+ * Resolve a bucket name to its OpenText target folder id.
+ *
+ * Both rejection paths that blame the caller (`BUCKET_REQUIRED`, `UNKNOWN_BUCKET`) are
+ * decided by a synchronous Map lookup, BEFORE any I/O — naming a bucket we don't have
+ * still costs zero OpenText calls. Only a self-provisioned bucket's first resolution
+ * touches the network, and that result is memoized for the process lifetime.
  *
  * @param {string} name bucket name as supplied by the caller (opaque namespace)
- * @returns {{folderNode: number}} a fresh object — mutating it cannot corrupt the registry
+ * @returns {Promise<{folderNode: number}>} a fresh object — mutating it cannot corrupt state
  * @throws  `BUCKET_REQUIRED` when absent/empty, `UNKNOWN_BUCKET` when unconfigured,
- *          `BUCKET_CONFIG_INVALID` on bad config
+ *          `BUCKET_CONFIG_INVALID` on bad config, `FOLDER_PROVISION_FAILED` when OpenText
+ *          would not resolve or create the folder
  */
-function resolveBucket(name) {
+async function resolveBucket(name) {
   // Map lookup (not a plain object) so 'constructor'/'__proto__' are ordinary misses.
   if (typeof name !== 'string' || !name.trim()) throw bucketRequired();
   const entry = registry().get(name);
   if (!entry) throw unknownBucket(name);
-  return { ...entry };
+  if (entry.folderNode) return { folderNode: entry.folderNode };
+
+  let pending = _folderPromises.get(name);
+  if (!pending) {
+    // Tag every failure — a refused create, a dead tunnel, a same-named non-folder — so the
+    // handler answers 502 (upstream) instead of 500 (our config). The original error rides
+    // along as `cause` for describeError.
+    pending = opentext.findOrCreateFolder(entry.parentNode, entry.folderName)
+      .catch((cause) => {
+        const err = new Error(
+          `could not resolve folder "${entry.folderName}" under node ${entry.parentNode}`,
+          { cause },
+        );
+        err.code = 'FOLDER_PROVISION_FAILED';
+        throw err;
+      });
+    _folderPromises.set(name, pending);
+    // Drop a cached rejection so the next upload retries instead of serving a stuck error
+    // (same shape as opentext.js getTicket).
+    pending.catch(() => _folderPromises.delete(name));
+  }
+  return { folderNode: await pending };
 }
 
-/** Clear the memoized config (tests / a config change without a restart). */
+/** Clear the memoized config and resolved folders (tests / a config change without a restart). */
 function clearRegistryCache() {
   _registry = undefined;
+  _folderPromises = new Map();
 }
 
 // 0007 adds the writer ACL here — `allowedWriters` per entry plus a `mayWrite(azp, bucket)`
