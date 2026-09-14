@@ -21,7 +21,14 @@ modules:
       # The portal SPA writes to `invoices`, so its folderNode must stay equal to
       # OPENTEXT_FOLDER_ID above (the portal lists from that node; a mismatch means an
       # upload succeeds but never shows up in the listing).
-      OPENTEXT_BUCKETS: '{"invoices":{"folderNode":5816}}'
+      #
+      # allowedWriters is the writer ACL (task 0007): the OAuth `azp` values allowed to write
+      # the bucket, and a bucket without it accepts NO writers. The value below is a
+      # PLACEHOLDER — the portal's real azp is the frontend OIDC client's, which is not in
+      # this file and cannot be derived from it. Read it from the denial log line
+      # ("upload denied: azp ...") or from the browser's decoded token, then redeploy.
+      # Until it is set, the SPA's upload returns 403.
+      OPENTEXT_BUCKETS: '{"invoices":{"folderNode":5816,"allowedWriters":["REPLACE-WITH-FRONTEND-AZP"]}}'
       OPENTEXT_DELIVERY_MODE: "cdn"
       AWS_REGION: "us-east-1"
       S3_BUCKET: "opentext-cdn-cache-gpc"

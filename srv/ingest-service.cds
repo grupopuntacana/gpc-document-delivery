@@ -15,9 +15,12 @@
  * Uploads are routed by **bucket**: the caller names a bucket and `srv/lib/buckets.js`
  * maps it to the OpenText folder the document lands in (task 0005). A bucket configured
  * with a parent node + folder name creates that folder on its first upload instead of
- * requiring one provisioned by hand (task 0006). The per-caller
- * authorization model — which app may write which bucket — is still deferred (ADR 0005,
- * task 0007): today any authenticated caller may name any configured bucket.
+ * requiring one provisioned by hand (task 0006).
+ *
+ * Which app may write which bucket is the bucket's `allowedWriters` ACL (task 0007): the
+ * caller's OAuth `azp` is derived from its token and checked against it, so one app cannot
+ * write another's namespace. There is deliberately no `app`/`source` field here — authority
+ * is derived, never declared, and an undeclared field is rejected outright.
  */
 @path: 'ingest'
 service IngestService {

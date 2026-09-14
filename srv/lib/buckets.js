@@ -9,9 +9,15 @@
  * of two ways — exactly one, never both:
  *
  *   OPENTEXT_BUCKETS='{
- *     "invoices":   {"folderNode": 52480},                          // pre-provisioned
- *     "statements": {"parentNode": 5816, "folderName": "statements"} // self-provisioned
+ *     "invoices":   {"folderNode": 52480, "allowedWriters": ["app-a-client-id"]},
+ *     "statements": {"parentNode": 5816, "folderName": "statements",
+ *                    "allowedWriters": ["app-b-client-id"]}
  *   }'
+ *
+ * `allowedWriters` is the per-bucket writer ACL (task 0007), orthogonal to how the bucket
+ * names its folder: it lists the OAuth `azp` values allowed to write the bucket. A bucket
+ * with no `allowedWriters` accepts **no** writers — there is no wildcard and no
+ * open-by-default, since the point of a bucket is that one app cannot write another's.
  *
  * `folderNode` points at a folder an operator created by hand. `parentNode` + `folderName`
  * lets the bucket create its own folder on first use (task 0006) — no OpenText click-ops
@@ -57,9 +63,10 @@ function bucketRequired() {
 }
 
 function unknownBucket(name) {
-  // Deliberately does NOT list the configured buckets: the message reaches an
-  // authenticated caller as a 400, and enumerating other apps' namespaces would
-  // undercut the isolation 0007 adds.
+  // Deliberately does NOT list the configured buckets: enumerating other apps' namespaces
+  // would undercut the write isolation. Note the ingest handler denies an unknown bucket
+  // with a 403 before this message is ever reached; it surfaces only to a caller authorized
+  // for some other bucket, and through resolveBucket's own unit tests.
   const err = new Error(`unknown bucket: ${JSON.stringify(name.slice(0, MAX_NAME_IN_ERROR))}`);
   err.code = 'UNKNOWN_BUCKET';
   return err;
@@ -80,6 +87,32 @@ function nodeId(bucket, field, configured) {
     );
   }
   return n;
+}
+
+/**
+ * Validate a bucket's writer ACL into a Set of azp values. Absent or `[]` is legal config and
+ * leaves the bucket un-writable — never open.
+ *
+ * A non-array or a blank entry is a config error rather than a lenient read: an ACL an
+ * operator believes grants access but doesn't is the failure this guards against.
+ */
+function writerAcl(bucket, configured) {
+  if (configured === undefined) return new Set();
+  if (!Array.isArray(configured)) {
+    throw configError(
+      `${BUCKETS_ENV}: bucket "${bucket}" has an invalid allowedWriters `
+        + `(must be an array of azp strings): ${JSON.stringify(configured)}`,
+    );
+  }
+  return new Set(configured.map((azp) => {
+    const trimmed = typeof azp === 'string' ? azp.trim() : '';
+    if (!trimmed) {
+      throw configError(
+        `${BUCKETS_ENV}: bucket "${bucket}" has an invalid allowedWriters entry: ${JSON.stringify(azp)}`,
+      );
+    }
+    return trimmed;
+  }));
 }
 
 /**
@@ -126,8 +159,10 @@ function registry() {
       );
     }
 
+    const allowedWriters = writerAcl(name, entry.allowedWriters);
+
     if (hasFolderNode) {
-      return [name, { folderNode: nodeId(name, 'folderNode', entry.folderNode) }];
+      return [name, { folderNode: nodeId(name, 'folderNode', entry.folderNode), allowedWriters }];
     }
 
     const folderName = typeof entry.folderName === 'string' ? entry.folderName.trim() : '';
@@ -136,7 +171,9 @@ function registry() {
         `${BUCKETS_ENV}: bucket "${name}" has an invalid folderName: ${JSON.stringify(entry.folderName)}`,
       );
     }
-    return [name, { parentNode: nodeId(name, 'parentNode', entry.parentNode), folderName }];
+    return [name, {
+      parentNode: nodeId(name, 'parentNode', entry.parentNode), folderName, allowedWriters,
+    }];
   }));
   return _registry;
 }
@@ -190,11 +227,29 @@ function clearRegistryCache() {
   _folderPromises = new Map();
 }
 
-// 0007 adds the writer ACL here — `allowedWriters` per entry plus a `mayWrite(azp, bucket)`
-// predicate the handler calls before resolveBucket(). Kept out of this slice on purpose:
-// every authenticated caller may currently name any configured bucket.
+/**
+ * May this caller write this bucket? A synchronous registry lookup, never a folder
+ * resolution — so a denied write costs zero OpenText calls even on a self-provisioned bucket.
+ *
+ * Fails closed: an empty azp, an unknown bucket and an empty ACL are all `false`. Total
+ * rather than throwing, so the handler decides the 400-vs-403 question in one place. The
+ * match is exact and case-sensitive.
+ *
+ * @param {string} azp the caller's OAuth authorized party, derived from its token
+ * @param {string} bucket bucket name as supplied by the caller
+ * @returns {boolean}
+ * @throws `BUCKET_CONFIG_INVALID` when the deployed registry is broken
+ */
+function mayWrite(azp, bucket) {
+  if (typeof azp !== 'string' || !azp.trim()) return false;
+  if (typeof bucket !== 'string' || !bucket.trim()) return false;
+  const entry = registry().get(bucket);
+  if (!entry) return false;
+  return entry.allowedWriters.has(azp.trim());
+}
 
 module.exports = {
   resolveBucket,
+  mayWrite,
   clearRegistryCache,
 };
