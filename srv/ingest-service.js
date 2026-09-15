@@ -6,6 +6,7 @@ const cds = require('@sap/cds');
 const buckets = require('./lib/buckets');
 const opentext = require('./lib/opentext');
 const token = require('./lib/token');
+const { newDocId } = require('./lib/docref');
 
 const LOG = cds.log('ingest');
 
@@ -87,6 +88,10 @@ function authorizeWrite(user, bucket) {
 
 module.exports = class IngestService extends cds.ApplicationService {
   init() {
+    // The ownership/revocation store (db/schema.cds). Not projected on this service — it is
+    // an internal registry, never a queryable entity (DoD-5) — so reach it by its db name.
+    const { Documents } = cds.entities('gpc.documentdelivery');
+
     this.on('uploadDocument', async (req) => {
       const {
         bucket, fileName, contentType, contentBase64,
@@ -157,12 +162,26 @@ module.exports = class IngestService extends cds.ApplicationService {
           name,
           contentType || 'application/octet-stream',
         );
+        // Mint the opaque claim-check and persist the ownership/revocation row (ADR 0006).
+        // The consumer stores `docId` in place of the nodeId; the nodeId stays in this row and
+        // is never returned. `ownerId` is left null here — the customer dimension is task 0009.
+        const docId = newDocId();
+        await INSERT.into(Documents).entries({
+          docId,
+          nodeId,
+          bucket,
+          ownerAzp: auth.azp,
+          revoked: false,
+          createdAt: new Date().toISOString(),
+        });
+        // A short-lived token so a caller that wants an immediate link need not round-trip
+        // linkFor; the durable re-mint handle is `docId`, not this token.
         const tok = await token.makeToken(nodeId, { ttlDays: TOKEN_TTL_DAYS });
         LOG.info(
-          `uploaded "${fileName}" as "${name}" -> node ${nodeId} `
+          `uploaded "${fileName}" as "${name}" -> node ${nodeId} (docId ${docId}) `
             + `in bucket "${bucket}" (folder ${folderNode}, ${buffer.length} bytes, ${from})`,
         );
-        return { nodeId, name, token: tok };
+        return { docId, name, token: tok };
       } catch (err) {
         const reason = opentext.describeError(err);
         LOG.error(`upload failed (${from}):`, reason);

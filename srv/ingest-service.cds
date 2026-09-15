@@ -33,8 +33,11 @@ service IngestService {
     contentType   : String,      // MIME type; defaults to application/pdf when omitted
     contentBase64 : LargeString  // the file bytes, base64-encoded
   ) returns {
-    nodeId : Int64;             // new OpenText node id (Int64: opaque id, never truncate)
+    docId  : String;            // opaque, unguessable claim-check (ADR 0006) — the durable
+                                // handle the caller stores; NEVER the raw OpenText nodeId,
+                                // which stays inside the service and is not returned here
     name   : String;            // stored name (original, or UUID-suffixed on collision)
-    token  : String;            // sharing token for /invoice/{token}
+    token  : String;            // short-lived sharing token for an immediate /invoice/{token}
+                                // link; re-mint later from `docId` via LinkService.linkFor
   };
 }

@@ -151,7 +151,7 @@ describe('IngestService.uploadDocument', () => {
 
   const b64 = (s) => Buffer.from(s).toString('base64');
 
-  it('uploads, returns nodeId + name + a token', async () => {
+  it('uploads, returns an opaque docId + name + a token (never the nodeId)', async () => {
     mockTransport({ existingNames: [], newId: 9001 });
     const { data } = await callUpload(srv, APP_A, {
       bucket: 'invoices',
@@ -159,7 +159,10 @@ describe('IngestService.uploadDocument', () => {
       contentType: 'application/pdf',
       contentBase64: b64('%PDF-1.7 hello'),
     });
-    expect(data.nodeId).toBe(9001);
+    // ADR 0006: the durable handle is the opaque docId; the raw nodeId never leaves the service.
+    expect(data.docId).toMatch(/^[A-Za-z0-9_-]{20,}$/); // 128-bit base64url, no structure
+    expect(data.nodeId).toBeUndefined();
+    expect(JSON.stringify(data)).not.toContain('9001'); // no nodeId anywhere in the body
     expect(data.name).toBe('invoice.pdf');
     expect(data.token).toMatch(/^[^.]+\.[^.]+$/); // base64url(payload).base64url(sig)
   });
@@ -199,7 +202,9 @@ describe('IngestService.uploadDocument', () => {
       contentType: 'image/jpeg',
       contentBase64: b64('\xFF\xD8\xFF fake-jpeg'),
     });
-    expect(data.nodeId).toBe(9004);
+    // node 9004 was stored, but the response exposes only the opaque docId, never the nodeId
+    expect(data.docId).toBeTruthy();
+    expect(data.nodeId).toBeUndefined();
     expect(creates[0].data.toString('utf8')).toContain('Content-Type: image/jpeg');
     expect(creates[0].data.toString('utf8')).toContain('filename="photo.jpg"');
   });

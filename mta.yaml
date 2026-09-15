@@ -49,6 +49,7 @@ modules:
           srv-url: ${default-url}
           srv-cert-url: '${protocol}://${default-host}.cert.${default-domain}'
     requires:
+      - name: document-delivery-db
       - name: document-delivery-ias
         parameters:
           config:
@@ -58,6 +59,16 @@ modules:
       - name: document-delivery-connectivity
       - name: document-delivery-logging
       - name: document-delivery-credstore
+
+  # HDI-container deployer for the Documents ownership/revocation store (ADR 0006, task 0008).
+  # `cds build --production` emits the HANA artifacts under gen/db.
+  - name: document-delivery-db-deployer
+    type: hdb
+    path: gen/db
+    parameters:
+      buildpack: nodejs_buildpack
+    requires:
+      - name: document-delivery-db
 
   - name: document-delivery-app-deployer
     type: com.sap.application.content
@@ -97,6 +108,11 @@ modules:
         []
 
 resources:
+  - name: document-delivery-db
+    type: com.sap.xs.hdi-container
+    parameters:
+      service: hana
+      service-plan: hdi-shared
   - name: document-delivery-ias
     type: org.cloudfoundry.managed-service
     parameters:

@@ -542,6 +542,37 @@ async function findOrCreateFolder(parentNode, name) {
   return createFolder(parentNode, name);
 }
 
+/**
+ * Read a node's parent folder id from OTCS (ADR 0007 §Consequences — the capability the
+ * folder-guarded claim needs). Rides the same OTDSTicket-on-every-call + single-retry dance
+ * as every other OTCS read, through the `deps` seam, so tests simulate it without OpenText.
+ *
+ * OTCS v2 exposes the parent as `properties.parent_id`; we read it defensively and coerce to
+ * a number. Best-effort: returns `null` when the property is absent or non-numeric, so a
+ * caller (the claim guard) fails closed rather than treating an unreadable parent as a match.
+ * @returns {Promise<number|null>}
+ */
+async function getParentId(nodeId) {
+  const res = await withTicket((ticket) => fetchNode(ticket, nodeId));
+  const props = res.data && res.data.results && res.data.results.data
+    && res.data.results.data.properties;
+  const raw = props && (props.parent_id != null ? props.parent_id : props.parentId);
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * Is `nodeId` a direct child of `folderId`? The folder-guard the delivery service uses to
+ * authorize an app-to-app claim of a directly-uploaded node (ADR 0007 §3): the caller may
+ * only share nodes that live in its own bucket's folder. Fails closed — an unreadable parent
+ * (`getParentId` → null) is `false`, never a match.
+ * @returns {Promise<boolean>}
+ */
+async function nodeInFolder(nodeId, folderId) {
+  const parent = await getParentId(nodeId);
+  return parent != null && Number(parent) === Number(folderId);
+}
+
 const YEAR_PREFIX = /^\d{4}-\d{2}-/;
 
 /**
@@ -600,6 +631,8 @@ module.exports = {
   uploadDocument,
   createFolder,
   findOrCreateFolder,
+  getParentId,
+  nodeInFolder,
   downloadDocument,
   downloadFileName,
   extensionForType,

@@ -248,8 +248,29 @@ function mayWrite(azp, bucket) {
   return entry.allowedWriters.has(azp.trim());
 }
 
+/**
+ * May this caller MINT a delivery link for a document in this bucket? The read-side twin of
+ * `mayWrite` (task 0008): an app's read scope is its own bucket, so an app that may write a
+ * bucket may re-mint links over it, and no one else.
+ *
+ * Deliberately `= mayWrite` for now — one owner-only ACL, not a second one to keep in sync.
+ * It is a distinct export so the read decision has its own name at every call site; if read
+ * and write authority ever diverge (e.g. a read-only consumer azp), only this changes.
+ *
+ * Same failure-closed, total, synchronous contract as `mayWrite`.
+ *
+ * @param {string} azp the caller's OAuth authorized party, derived from its token
+ * @param {string} bucket bucket name
+ * @returns {boolean}
+ * @throws `BUCKET_CONFIG_INVALID` when the deployed registry is broken
+ */
+function mayRead(azp, bucket) {
+  return mayWrite(azp, bucket);
+}
+
 module.exports = {
   resolveBucket,
   mayWrite,
+  mayRead,
   clearRegistryCache,
 };
