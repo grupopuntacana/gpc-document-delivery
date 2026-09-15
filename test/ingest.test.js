@@ -411,6 +411,16 @@ describe('IngestService.uploadDocument', () => {
       expect(denied.reason).toContain('statements');
     });
 
+    it('flattens control characters in the azp it logs, without altering the match', () => {
+      // The reason string reaches the log verbatim; a newline in the azp would otherwise let a
+      // caller forge a second entry. The ACL still sees the raw value.
+      const forged = `${APP_A}\nupload denied: FORGED`;
+      const denied = authorizeWrite(asApp(forged), 'invoices');
+      expect(denied.ok).toBe(false);
+      expect(denied.reason).not.toMatch(/[\r\n]/);
+      expect(denied.azp).toBe(forged);
+    });
+
     it('is decided on the derived azp — a body field cannot grant access (AC-2)', async () => {
       // Two independent layers. First, authorizeWrite takes (user, bucket) and never a body:
       // the signature is the guarantee, so a caller claiming to be APP_B stays denied.

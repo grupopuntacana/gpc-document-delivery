@@ -372,5 +372,21 @@ describe('buckets registry', () => {
       expect(resolved).toEqual({ folderNode: 52480 });
       expect(resolved.allowedWriters).toBeUndefined();
     });
+
+    it('does not expose allowedWriters for a self-provisioned bucket either', async () => {
+      // The self-provisioned branch builds its result separately from the folderNode one,
+      // so the invariant needs pinning on both paths.
+      const spy = vi.spyOn(opentext, 'findOrCreateFolder').mockResolvedValue(52484);
+      try {
+        const b = loadWith(JSON.stringify({
+          archive: { parentNode: 5816, folderName: 'archive', allowedWriters: ['app-a'] },
+        }));
+        const resolved = await b.resolveBucket('archive');
+        expect(resolved).toEqual({ folderNode: 52484 });
+        expect(resolved.allowedWriters).toBeUndefined();
+      } finally {
+        spy.mockRestore();
+      }
+    });
   });
 });

@@ -56,6 +56,17 @@ function callerAzp(user) {
 }
 
 /**
+ * Flatten control characters so a caller-supplied azp cannot forge a second log line.
+ * Only for display: the ACL is matched against the raw value, never this one.
+ *
+ * @param {string} azp the caller's azp
+ * @returns {string} the azp with CR/LF/tab collapsed to spaces
+ */
+function forLog(azp) {
+  return azp.replace(/[\r\n\t]/g, ' ');
+}
+
+/**
  * The write-authorization decision. Takes no body — a spoofed field cannot reach it.
  *
  * An unknown bucket is denied rather than reported as unknown: a 400-vs-403 split would let a
@@ -69,7 +80,7 @@ function authorizeWrite(user, bucket) {
   const azp = callerAzp(user);
   if (!azp) return { ok: false, azp, reason: 'no azp claim on the caller token' };
   if (!buckets.mayWrite(azp, bucket)) {
-    return { ok: false, azp, reason: `azp "${azp}" may not write bucket "${bucket}"` };
+    return { ok: false, azp, reason: `azp "${forLog(azp)}" may not write bucket "${bucket}"` };
   }
   return { ok: true, azp };
 }
@@ -100,7 +111,7 @@ module.exports = class IngestService extends cds.ApplicationService {
         LOG.warn(`upload denied: ${auth.reason}`);
         return req.reject(403, 'not authorized to write this bucket');
       }
-      const from = `azp "${auth.azp}"`;
+      const from = `azp "${forLog(auth.azp)}"`;
 
       // Resolve the target folder BEFORE reading the payload: an unknown bucket must cost
       // nothing (both caller-blaming rejections below are decided by a sync Map lookup, so
@@ -110,10 +121,9 @@ module.exports = class IngestService extends cds.ApplicationService {
       try {
         ({ folderNode } = await buckets.resolveBucket(bucket));
       } catch (err) {
-        // A caller naming a bucket we don't have is a 400; a broken deployed config is
-        // ours, not theirs — surface it as a 500 rather than blaming the request.
-        // Log the 400s too: "uploads started failing" needs something to correlate against,
-        // which is what the azp makes actionable.
+        // Unreachable since 0007: the guard above rejects an empty bucket and `mayWrite`
+        // only grants a bucket the registry holds, so neither code can surface here. Kept as
+        // belt-and-braces — an unknown bucket answers 403 at the gate, never 400.
         if (err.code === 'BUCKET_REQUIRED' || err.code === 'UNKNOWN_BUCKET') {
           LOG.warn(`upload rejected (${from}): ${err.message}`);
           return req.reject(400, err.message);
