@@ -1,6 +1,6 @@
 # 0007 — Per-app ingest authorization: azp → allowed bucket (the "no overlap")
 
-**Status:** todo
+**Status:** done
 **Depends on:** [0005](0005-bucket-model-folder-routing.md); the family **Auth kernel**
 (`azp → sourceSystem` resolution, commons `cross-cutting.md` §2.1) — see open decision below.
 **Architecture:** commons epic `document-service.md` T2; the "ingest authorization model"
@@ -23,37 +23,70 @@ is rejected `403`.
 
 ## Acceptance criteria
 
-- [ ] App A's token (one `azp`) **cannot** write a bucket owned by app B → `403`; app A writing
+- [x] App A's token (one `azp`) **cannot** write a bucket owned by app B → `403`; app A writing
       its own bucket succeeds.
-- [ ] The authorization check is on the **derived** `azp`, not on any request-body field —
+- [x] The authorization check is on the **derived** `azp`, not on any request-body field —
       a body carrying another app's name changes nothing (test sets `azp` on the mock user and
       asserts the body is ignored).
-- [ ] A caller whose `azp` maps to **no** bucket is `403`; an unauthenticated caller stays `401`
+- [x] A caller whose `azp` maps to **no** bucket is `403`; an unauthenticated caller stays `401`
       (unchanged from `@requires`).
-- [ ] The `403` fires before any OpenText call (no folder is touched on a denied write).
+- [x] The `403` fires before any OpenText call (no folder is touched on a denied write).
 
 ## Checklist
 
 ### Registry — `srv/lib/buckets.js`
-- [ ] Add `allowedWriters: [azp, …]` (or an `azp → bucket(s)` map) per bucket.
-- [ ] `mayWrite(azp, bucket)` predicate; export it. Keep it pure config — no AMS call here unless
+- [x] Add `allowedWriters: [azp, …]` (or an `azp → bucket(s)` map) per bucket.
+- [x] `mayWrite(azp, bucket)` predicate; export it. Keep it pure config — no AMS call here unless
       the open decision below closes on AMS.
 
 ### Ingest handler — `srv/ingest-service.js`
-- [ ] Read `req.user.authInfo.token.azp`; reject `403` if empty (defensive — provenance must be
+- [x] Read `req.user.authInfo.token.azp`; reject `403` if empty (defensive — provenance must be
       present at the boundary, DoD-2).
-- [ ] Reject `403` if `!mayWrite(azp, req.data.bucket)`, before folder resolution/upload.
+- [x] Reject `403` if `!mayWrite(azp, req.data.bucket)`, before folder resolution/upload.
 
 ### Tests — `test/ingest.test.js`
-- [ ] Drive two callers with different `azp` (cds mock-auth user attrs / token stub); assert the
+- [x] Drive two callers with different `azp` (cds mock-auth user attrs / token stub); assert the
       cross-bucket write is `403` and the owned-bucket write succeeds.
-- [ ] Assert a spoofed body field does not grant access.
+- [x] Assert a spoofed body field does not grant access.
 
 ## Definition of Done (commons `cross-cutting.md` §1)
 - **DoD-2 (provenance derived):** bucket-write authority comes from `azp`, asserted non-empty at
   the boundary, never from the body.
 - **DoD-5 (two audiences):** ingest stays service-to-service IAS-authenticated; nothing here
   makes any entity queryable — the write action is the only surface.
+
+## How it landed
+
+- `srv/lib/buckets.js` — `allowedWriters` per entry (validated into a `Set`; absent or `[]`
+  means **no** writer, never open) plus a synchronous, total `mayWrite(azp, bucket)`.
+- `srv/ingest-service.js` — `callerAzp` (only `req.user.authInfo.token.azp`, no fallbacks) and
+  a pure `authorizeWrite(user, bucket)`, checked **before** `resolveBucket` so a denied write
+  cannot provision a folder. The caller's `azp` now rides on every ingest log line.
+- **An unknown bucket answers `403`, not `400`.** Differing statuses would let an unauthorized
+  caller enumerate other apps' namespaces one probe at a time — the same enumeration the
+  `unknownBucket` message already avoids, leaked through the status code. `bucket` missing from
+  the body stays `400` (malformed request, and no name to confirm).
+- The caller's `azp` rides on every ingest log line, including the denial — which is how an
+  operator learns the value to put in `allowedWriters`, since a bucket's ACL lists client ids
+  that are not in `mta.yaml` and cannot be derived from it. No diagnostic endpoint is exposed
+  for this: a caller can decode its own token, and the logs cover the operator's side.
+- Tests: the 13 HTTP upload tests were converted to `srv.send` under a constructed
+  `cds.context.user`, because each case needs two callers with different `azp` and the HTTP
+  client cannot vary basic credentials per request there. No seam was added to production code.
+  `401`/`403` stay asserted over HTTP.
+- **Local development.** Mocked auth *can* carry an `azp`: CAP spreads a mock user's whole
+  config into `cds.User` (`mocked-users.js` → `Object.assign`), so `.cdsrc.json` gives `admin`
+  (the portal's login-dialog identity) and `alice` (proxy/Insomnia) an `authInfo.token.azp`
+  each, under the `hybrid` profile. `.env.example` authorizes `admin`'s, so a fresh clone
+  exercises `azp → mayWrite → 200` from the portal with no per-developer setup; callers without
+  a granted `azp` still get `403`. `authInfo` on a mock user is not a documented CAP contract —
+  it survives only because CAP spreads the whole user config into `cds.User` — so an upgrade
+  that filters unknown keys would make local uploads `403` again.
+
+**Deploy note:** the portal SPA is itself an ingest caller and `srv-api` sets
+`forwardAuthToken: true`, so its `azp` is the frontend OIDC client's — not the `srv` module's.
+The SPA's upload returns `403` until that value is read from a live browser request and put in
+`invoices.allowedWriters`, which makes this a two-step deploy.
 
 ## Open decision this slice depends on (flag, don't assume)
 `azp → app` resolution mechanism is **unresolved** at the family level (commons

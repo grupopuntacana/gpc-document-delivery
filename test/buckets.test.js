@@ -260,4 +260,133 @@ describe('buckets registry', () => {
       expect(() => require('../srv/lib/buckets.js')).not.toThrow();
     });
   });
+
+  describe('writer ACL (0007)', () => {
+    const ACL_BUCKETS = JSON.stringify({
+      invoices: { folderNode: 52480, allowedWriters: ['app-a'] },
+      statements: { folderNode: 52481, allowedWriters: ['app-b', 'app-a'] },
+      orphan: { folderNode: 52482 },
+      revoked: { folderNode: 52483, allowedWriters: [] },
+    });
+
+    it('grants a bucket only to its listed writers', () => {
+      const b = loadWith(ACL_BUCKETS);
+      expect(b.mayWrite('app-a', 'invoices')).toBe(true);
+      expect(b.mayWrite('app-b', 'invoices')).toBe(false);
+    });
+
+    it('grants a bucket to every writer it lists', () => {
+      const b = loadWith(ACL_BUCKETS);
+      expect(b.mayWrite('app-a', 'statements')).toBe(true);
+      expect(b.mayWrite('app-b', 'statements')).toBe(true);
+    });
+
+    it('a bucket with no allowedWriters accepts NO writer (never open by default)', () => {
+      // The guard against the failure mode this slice exists to prevent: an un-granted
+      // bucket must not be writable by anyone, including an app granted elsewhere.
+      const b = loadWith(ACL_BUCKETS);
+      expect(b.mayWrite('app-a', 'orphan')).toBe(false);
+      expect(b.mayWrite('app-b', 'orphan')).toBe(false);
+    });
+
+    it('an explicitly empty allowedWriters is un-writable, not a config error', () => {
+      // Revoking every writer is a legitimate operator intent; it must not 500.
+      const b = loadWith(ACL_BUCKETS);
+      expect(() => b.mayWrite('app-a', 'revoked')).not.toThrow();
+      expect(b.mayWrite('app-a', 'revoked')).toBe(false);
+    });
+
+    it('denies an absent azp (DoD-2: provenance must be present)', () => {
+      const b = loadWith(ACL_BUCKETS);
+      ['', '   ', undefined, null, 0, {}].forEach((azp) => {
+        expect(b.mayWrite(azp, 'invoices')).toBe(false);
+      });
+    });
+
+    it('denies an unknown bucket without throwing (the predicate is total)', () => {
+      const b = loadWith(ACL_BUCKETS);
+      expect(b.mayWrite('app-a', 'no-such-bucket')).toBe(false);
+      expect(b.mayWrite('app-a', '')).toBe(false);
+      expect(b.mayWrite('app-a', undefined)).toBe(false);
+    });
+
+    it('treats prototype keys as ordinary misses', () => {
+      const b = loadWith(ACL_BUCKETS);
+      expect(b.mayWrite('app-a', 'constructor')).toBe(false);
+      expect(b.mayWrite('app-a', '__proto__')).toBe(false);
+    });
+
+    it('matches the azp exactly, case-sensitively (client ids are)', () => {
+      const b = loadWith(ACL_BUCKETS);
+      expect(b.mayWrite('app-a ', 'invoices')).toBe(true); // trimmed
+      expect(b.mayWrite(' app-a', 'invoices')).toBe(true);
+      expect(b.mayWrite('app-', 'invoices')).toBe(false); // no prefix match
+      expect(b.mayWrite('app-aa', 'invoices')).toBe(false);
+      expect(b.mayWrite('APP-A', 'invoices')).toBe(false); // no case folding
+    });
+
+    it('de-duplicates a repeated writer without complaining', () => {
+      const b = loadWith(JSON.stringify({
+        invoices: { folderNode: 52480, allowedWriters: ['app-a', 'app-a'] },
+      }));
+      expect(b.mayWrite('app-a', 'invoices')).toBe(true);
+    });
+
+    it('coexists with parentNode + folderName without tripping the "not both" check', () => {
+      const b = loadWith(JSON.stringify({
+        archive: { parentNode: 5816, folderName: 'archive', allowedWriters: ['app-a'] },
+      }));
+      expect(b.mayWrite('app-a', 'archive')).toBe(true);
+      expect(b.mayWrite('app-b', 'archive')).toBe(false);
+    });
+
+    it('never touches OpenText, even for a self-provisioned bucket', () => {
+      // What makes "no folder is touched on a denied write" structural rather than a matter
+      // of statement ordering in the handler.
+      const spy = vi.spyOn(opentext, 'findOrCreateFolder');
+      try {
+        const b = loadWith(JSON.stringify({
+          archive: { parentNode: 5816, folderName: 'archive', allowedWriters: ['app-a'] },
+        }));
+        expect(b.mayWrite('app-a', 'archive')).toBe(true);
+        expect(b.mayWrite('app-b', 'archive')).toBe(false);
+        expect(spy).not.toHaveBeenCalled();
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('rejects a malformed allowedWriters as a config error', () => {
+      const bad = ['app-a', {}, 123, true, ['app-a', null], ['app-a', ''], ['   '], [42]];
+      bad.forEach((allowedWriters) => {
+        const b = loadWith(JSON.stringify({ invoices: { folderNode: 52480, allowedWriters } }));
+        expect(() => b.mayWrite('app-a', 'invoices')).toThrow(/allowedWriters/);
+      });
+    });
+
+    it('does not expose allowedWriters through resolveBucket', async () => {
+      // resolveBucket hands out a fresh object; leaking the live Set would let a caller
+      // mutate the registry.
+      const b = loadWith(ACL_BUCKETS);
+      const resolved = await b.resolveBucket('invoices');
+      expect(resolved).toEqual({ folderNode: 52480 });
+      expect(resolved.allowedWriters).toBeUndefined();
+    });
+
+    it('does not expose allowedWriters for a self-provisioned bucket either', async () => {
+      // The self-provisioned branch builds its result separately from the folderNode one,
+      // so the invariant needs pinning on both paths.
+      const spy = vi.spyOn(opentext, 'findOrCreateFolder').mockResolvedValue(52484);
+      try {
+        const b = loadWith(JSON.stringify({
+          archive: { parentNode: 5816, folderName: 'archive', allowedWriters: ['app-a'] },
+        }));
+        const resolved = await b.resolveBucket('archive');
+        expect(resolved).toEqual({ folderNode: 52484 });
+        expect(resolved.allowedWriters).toBeUndefined();
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  });
 });

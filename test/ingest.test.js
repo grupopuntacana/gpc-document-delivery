@@ -6,8 +6,15 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 
 // The IngestService action talks to OpenText only through `opentext.deps`, so we mock the
-// transport (same pattern as selftest.test.js) and drive the action via cds.test's HTTP
-// client. SHARED_LINK_SECRET is needed so makeToken can mint the returned sharing token.
+// transport (same pattern as selftest.test.js). SHARED_LINK_SECRET is needed so makeToken can
+// mint the returned sharing token.
+//
+// Uploads are driven via `srv.send` under a constructed `cds.context.user` rather than over
+// HTTP: since 0007 the handler authorizes on `req.user.authInfo.token.azp`, and these tests
+// need two distinct callers per case, which basic auth cannot vary per request here. The user
+// carries a real `IdentityServiceToken` — the approach @sap/xssec's README prescribes for
+// local tests — so no seam is needed in production code. The HTTP client stays for the tests
+// that are about the HTTP contract itself (401/403).
 process.env.SHARED_LINK_SECRET = 'x'.repeat(64);
 process.env.OPENTEXT_FOLDER_ID = '52480';
 // Two buckets on DIFFERENT folder nodes — the point of the slice is that each lands in its
@@ -18,13 +25,18 @@ const STATEMENTS_FOLDER = 52481;
 // its folder on first upload (0006). Same registry, different shape.
 const ARCHIVE_PARENT = 5816;
 const ARCHIVE_NAME = 'archive';
+// Two callers with different azp: the isolation this slice exists to prove is that APP_A
+// cannot write APP_B's bucket. `invoices`/`archive` belong to A, `statements` to B.
+const APP_A = 'client-app-a';
+const APP_B = 'client-app-b';
 process.env.OPENTEXT_BUCKETS = JSON.stringify({
-  invoices: { folderNode: INVOICES_FOLDER },
-  statements: { folderNode: STATEMENTS_FOLDER },
-  archive: { parentNode: ARCHIVE_PARENT, folderName: ARCHIVE_NAME },
+  invoices: { folderNode: INVOICES_FOLDER, allowedWriters: [APP_A] },
+  statements: { folderNode: STATEMENTS_FOLDER, allowedWriters: [APP_B] },
+  archive: { parentNode: ARCHIVE_PARENT, folderName: ARCHIVE_NAME, allowedWriters: [APP_A] },
 });
 
 const cds = require('@sap/cds');
+const { IdentityServiceToken } = require('@sap/xssec');
 const opentext = require('../srv/lib/opentext.js');
 const buckets = require('../srv/lib/buckets.js');
 
@@ -33,11 +45,57 @@ const { GET, POST, axios } = cds.test(process.cwd());
 // basic creds. Use the default privileged 'alice' from cds mocked auth.
 axios.defaults.auth = { username: 'alice', password: '' };
 
+/**
+ * A caller identified only by its azp, shaped like the user CAP's ias strategy builds.
+ *
+ * The token is a real `IdentityServiceToken`, not a plain object: constructing one from a
+ * header/payload pair is what @sap/xssec's README prescribes for local tests (it explicitly
+ * discourages self-signed JWTs against a self-hosted JWKS). It exercises the actual `azp`
+ * getter the handler reads in production.
+ */
+const asApp = (azp) => new cds.User({
+  id: azp,
+  authInfo: {
+    token: new IdentityServiceToken(null, {
+      header: { alg: 'RS256' },
+      payload: { azp, sub: azp },
+    }),
+  },
+});
+
+/** A caller whose token carries the given payload verbatim — for the absent-claim cases. */
+const asTokenPayload = (payload) => ({
+  authInfo: { token: new IdentityServiceToken(null, { header: { alg: 'RS256' }, payload }) },
+});
+
+/**
+ * Invoke uploadDocument as `azp`. Rejections are re-shaped to the `{response:{status,data}}`
+ * form the HTTP client produced, so the assertions read the same either way — `srv.send`
+ * rejects with a CAP error carrying the status in `code`.
+ */
+async function callUpload(srv, azp, data) {
+  cds.context = { user: asApp(azp) };
+  try {
+    return { data: await srv.send({ event: 'uploadDocument', data }) };
+  } catch (e) {
+    const status = Number(e.code);
+    throw Object.assign(e, {
+      response: {
+        status: Number.isNaN(status) ? 500 : status,
+        data: { error: { message: e.message } },
+      },
+    });
+  }
+}
+
 describe('IngestService.uploadDocument', () => {
-  beforeAll(() => {
+  let srv;
+
+  beforeAll(async () => {
     // surface a clear failure instead of a hang if the server didn't boot
     expect(typeof POST).toBe('function');
     expect(typeof GET).toBe('function');
+    srv = await cds.connect.to('IngestService');
   });
 
   beforeEach(() => {
@@ -95,7 +153,7 @@ describe('IngestService.uploadDocument', () => {
 
   it('uploads, returns nodeId + name + a token', async () => {
     mockTransport({ existingNames: [], newId: 9001 });
-    const { data } = await POST('/odata/v4/ingest/uploadDocument', {
+    const { data } = await callUpload(srv, APP_A, {
       bucket: 'invoices',
       fileName: 'invoice.pdf',
       contentType: 'application/pdf',
@@ -108,7 +166,7 @@ describe('IngestService.uploadDocument', () => {
 
   it('de-duplicates a colliding filename with an 8-hex UUID suffix', async () => {
     const { creates } = mockTransport({ existingNames: ['invoice.pdf'], newId: 9002 });
-    const { data } = await POST('/odata/v4/ingest/uploadDocument', {
+    const { data } = await callUpload(srv, APP_A, {
       bucket: 'invoices',
       fileName: 'invoice.pdf',
       contentBase64: b64('%PDF-1.7 hello'),
@@ -125,7 +183,7 @@ describe('IngestService.uploadDocument', () => {
 
   it('defaults contentType to application/octet-stream when omitted', async () => {
     const { creates } = mockTransport({ newId: 9003 });
-    await POST('/odata/v4/ingest/uploadDocument', {
+    await callUpload(srv, APP_A, {
       bucket: 'invoices',
       fileName: 'invoice.pdf',
       contentBase64: b64('%PDF-1.7 hello'),
@@ -135,7 +193,7 @@ describe('IngestService.uploadDocument', () => {
 
   it('accepts a non-PDF file (e.g. a camera photo) with its own content type', async () => {
     const { creates } = mockTransport({ newId: 9004 });
-    const { data } = await POST('/odata/v4/ingest/uploadDocument', {
+    const { data } = await callUpload(srv, APP_A, {
       bucket: 'invoices',
       fileName: 'photo.jpg',
       contentType: 'image/jpeg',
@@ -149,7 +207,7 @@ describe('IngestService.uploadDocument', () => {
   it('rejects an empty file', async () => {
     mockTransport();
     await expect(
-      POST('/odata/v4/ingest/uploadDocument', { bucket: 'invoices', fileName: 'x.pdf', contentBase64: '' }),
+      callUpload(srv, APP_A, { bucket: 'invoices', fileName: 'x.pdf', contentBase64: '' }),
     ).rejects.toMatchObject({ response: { status: 400 } });
   });
 
@@ -165,7 +223,7 @@ describe('IngestService.uploadDocument', () => {
       throw err;
     });
     await expect(
-      POST('/odata/v4/ingest/uploadDocument', {
+      callUpload(srv, APP_A, {
         bucket: 'invoices',
         fileName: 'invoice.pdf',
         contentBase64: b64('%PDF-1.7 hello'),
@@ -176,7 +234,7 @@ describe('IngestService.uploadDocument', () => {
   describe('bucket -> folder routing (0005)', () => {
     it('routes two buckets to their own OpenText parent folders', async () => {
       const a = mockTransport({ newId: 9101 });
-      await POST('/odata/v4/ingest/uploadDocument', {
+      await callUpload(srv, APP_A, {
         bucket: 'invoices',
         fileName: 'invoice.pdf',
         contentBase64: b64('%PDF-1.7 hello'),
@@ -184,7 +242,7 @@ describe('IngestService.uploadDocument', () => {
       expect(parentIdOf(a.creates[0])).toBe(INVOICES_FOLDER);
 
       const b = mockTransport({ newId: 9102 });
-      await POST('/odata/v4/ingest/uploadDocument', {
+      await callUpload(srv, APP_B, {
         bucket: 'statements',
         fileName: 'invoice.pdf',
         contentBase64: b64('%PDF-1.7 hello'),
@@ -199,7 +257,7 @@ describe('IngestService.uploadDocument', () => {
       // The dedup READ must consult the bucket's own folder — otherwise a name taken in
       // one bucket would rename an upload in another.
       const { lists } = mockTransport({ existingNames: [], newId: 9103 });
-      await POST('/odata/v4/ingest/uploadDocument', {
+      await callUpload(srv, APP_B, {
         bucket: 'statements',
         fileName: 'invoice.pdf',
         contentBase64: b64('%PDF-1.7 hello'),
@@ -208,21 +266,23 @@ describe('IngestService.uploadDocument', () => {
       expect(lists[0].url).not.toContain(String(INVOICES_FOLDER));
     });
 
-    it('rejects an unknown bucket with 400 before any OpenText call', async () => {
+    it('rejects an unknown bucket with 403, not 400 — no enumeration by status code', async () => {
+      // 400-for-absent vs 403-for-forbidden would let a caller probe the namespace one name
+      // at a time, which is the enumeration the message already avoids (0007).
       mockTransport();
       await expect(
-        POST('/odata/v4/ingest/uploadDocument', {
+        callUpload(srv, APP_A, {
           bucket: 'no-such-bucket',
           fileName: 'invoice.pdf',
           contentBase64: b64('%PDF-1.7 hello'),
         }),
-      ).rejects.toMatchObject({ response: { status: 400 } });
+      ).rejects.toMatchObject({ response: { status: 403 } });
       expect(opentext.deps.executeHttpRequest).not.toHaveBeenCalled();
     });
 
     it('rejects a missing bucket with 400 — no silent fallback to the legacy folder', async () => {
       mockTransport();
-      const err = await POST('/odata/v4/ingest/uploadDocument', {
+      const err = await callUpload(srv, APP_A, {
         fileName: 'invoice.pdf',
         contentBase64: b64('%PDF-1.7 hello'),
       }).catch((e) => e);
@@ -234,15 +294,17 @@ describe('IngestService.uploadDocument', () => {
     });
 
     it('does not name the configured buckets in the rejection', async () => {
-      // The 400 reaches an authenticated caller; listing other apps' namespaces would
-      // turn a typo into enumeration (0007 adds the write ACL).
+      // The rejection reaches an authenticated caller; listing other apps' namespaces would
+      // turn a typo into enumeration.
       mockTransport();
-      const err = await POST('/odata/v4/ingest/uploadDocument', {
+      const err = await callUpload(srv, APP_A, {
         bucket: 'no-such-bucket',
         fileName: 'invoice.pdf',
         contentBase64: b64('%PDF-1.7 hello'),
       }).catch((e) => e);
-      expect(JSON.stringify(err.response.data)).not.toContain('statements');
+      const body = JSON.stringify(err.response.data);
+      expect(body).not.toContain('statements');
+      expect(body).not.toContain('no-such-bucket');
     });
   });
 
@@ -253,7 +315,7 @@ describe('IngestService.uploadDocument', () => {
       buckets.clearRegistryCache();
     });
 
-    const upload = (bucket, fileName = 'invoice.pdf') => POST('/odata/v4/ingest/uploadDocument', {
+    const upload = (bucket, fileName = 'invoice.pdf') => callUpload(srv, APP_A, {
       bucket,
       fileName,
       contentBase64: b64('%PDF-1.7 hello'),
@@ -326,6 +388,130 @@ describe('IngestService.uploadDocument', () => {
 
       expect(folderCreates).toHaveLength(0);
       expect(parentIdOf(creates[0])).toBe(INVOICES_FOLDER);
+    });
+  });
+
+  describe('per-app write authorization (0007)', () => {
+    const { authorizeWrite } = require('../srv/ingest-service.js');
+
+    beforeEach(() => {
+      buckets.clearRegistryCache();
+    });
+
+    it('lets each app write its own bucket', () => {
+      expect(authorizeWrite(asApp(APP_A), 'invoices').ok).toBe(true);
+      expect(authorizeWrite(asApp(APP_B), 'statements').ok).toBe(true);
+    });
+
+    it('denies app A the bucket owned by app B (AC-1)', () => {
+      const denied = authorizeWrite(asApp(APP_A), 'statements');
+      expect(denied.ok).toBe(false);
+      // the log line names both, so an operator can act on it
+      expect(denied.reason).toContain(APP_A);
+      expect(denied.reason).toContain('statements');
+    });
+
+    it('flattens control characters in the azp it logs, without altering the match', () => {
+      // The reason string reaches the log verbatim; a newline in the azp would otherwise let a
+      // caller forge a second entry. The ACL still sees the raw value.
+      const forged = `${APP_A}\nupload denied: FORGED`;
+      const denied = authorizeWrite(asApp(forged), 'invoices');
+      expect(denied.ok).toBe(false);
+      expect(denied.reason).not.toMatch(/[\r\n]/);
+      expect(denied.azp).toBe(forged);
+    });
+
+    it('is decided on the derived azp — a body field cannot grant access (AC-2)', async () => {
+      // Two independent layers. First, authorizeWrite takes (user, bucket) and never a body:
+      // the signature is the guarantee, so a caller claiming to be APP_B stays denied.
+      expect(authorizeWrite(asApp(APP_A), 'statements').ok).toBe(false);
+
+      // Second, the action declares no such field, so CAP rejects a spoofing body outright —
+      // it never even reaches the handler.
+      mockTransport();
+      const err = await callUpload(srv, APP_A, {
+        bucket: 'statements',
+        azp: APP_B,
+        fileName: 'invoice.pdf',
+        contentBase64: b64('%PDF-1.7 hello'),
+      }).catch((e) => e);
+      expect(err.message).toMatch(/Property "azp" does not exist/);
+      expect(opentext.deps.executeHttpRequest).not.toHaveBeenCalled();
+    });
+
+    it('denies a caller with no azp claim (AC-3)', () => {
+      const noAzp = [
+        undefined,
+        {},
+        { authInfo: {} }, // authenticated, but no token at all
+        asTokenPayload({ sub: 'svc' }), // a real token that simply carries no azp
+        asTokenPayload({ azp: '' }),
+        asTokenPayload({ azp: '   ' }),
+        { id: 'alice', attr: {} }, // the realistic mocked-auth shape
+      ];
+      noAzp.forEach((user) => {
+        expect(authorizeWrite(user, 'invoices').ok).toBe(false);
+      });
+    });
+
+    it('never reads azp from req.user.attr', () => {
+      // Pins the rule as a test rather than a comment: attr is stripped on the IAS user path
+      // and absent on the client-credentials path, so a well-meaning fallback here would be
+      // a silent widening.
+      expect(authorizeWrite({ id: APP_A, attr: { azp: APP_A } }, 'invoices').ok).toBe(false);
+    });
+
+    it('denies a self-provisioned bucket without touching OpenText (AC-4)', () => {
+      expect(authorizeWrite(asApp(APP_B), 'archive').ok).toBe(false);
+      expect(opentext.deps.executeHttpRequest).not.toHaveBeenCalled();
+    });
+
+    it('throws on a broken registry rather than reporting a denial', () => {
+      // A config error must never be mistaken for "not authorized" — the handler owes a 500.
+      const saved = process.env.OPENTEXT_BUCKETS;
+      process.env.OPENTEXT_BUCKETS = '{not json';
+      buckets.clearRegistryCache();
+      try {
+        expect(() => authorizeWrite(asApp(APP_A), 'invoices')).toThrow(/not valid JSON/);
+      } finally {
+        process.env.OPENTEXT_BUCKETS = saved;
+        buckets.clearRegistryCache();
+      }
+    });
+
+    describe('over HTTP', () => {
+      it('stays 401 for an unauthenticated caller', async () => {
+        mockTransport();
+        const saved = axios.defaults.auth;
+        axios.defaults.auth = undefined;
+        try {
+          const err = await POST('/odata/v4/ingest/uploadDocument', {
+            bucket: 'invoices',
+            fileName: 'invoice.pdf',
+            contentBase64: b64('%PDF-1.7 hello'),
+          }).catch((e) => e);
+          expect(err.response.status).toBe(401);
+        } finally {
+          axios.defaults.auth = saved;
+        }
+        expect(opentext.deps.executeHttpRequest).not.toHaveBeenCalled();
+      });
+
+      it('403s an authenticated caller whose token carries no azp', async () => {
+        // Mocked auth builds no authInfo, so every HTTP caller is azp-less: the deployed
+        // portal behaves the same until its azp is added to the bucket's allowedWriters.
+        mockTransport();
+        const err = await POST('/odata/v4/ingest/uploadDocument', {
+          bucket: 'invoices',
+          fileName: 'invoice.pdf',
+          contentBase64: b64('%PDF-1.7 hello'),
+        }).catch((e) => e);
+        expect(err.response.status).toBe(403);
+        const body = JSON.stringify(err.response.data);
+        expect(body).not.toContain('statements');
+        expect(body).not.toContain('invoices');
+        expect(opentext.deps.executeHttpRequest).not.toHaveBeenCalled();
+      });
     });
   });
 });

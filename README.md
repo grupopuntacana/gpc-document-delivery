@@ -53,6 +53,10 @@ The `SHARED_LINK_SECRET` value **must be byte-identical** to the Python side
 (`../python/opentext-cdn-prototype/.env`, 64 chars) or every existing sharing token
 breaks — see the cross-side interop contract in that repo's `CLAUDE.md`.
 
+To upload through the portal locally you also need a caller `azp`, since ingest is
+ACL-checked (task 0007). One ships with the repo — see
+[Writing locally (the dev `azp`)](#writing-locally-the-dev-azp).
+
 ## Secrets during validation (Credential Store deferred)
 
 The Credential Store is a **paid** service, so it's commented out in `mta.yaml` while we
@@ -167,7 +171,8 @@ open them by clicking. Three pieces:
   Cloud Connector (`opentext.uploadDocument`, the first **write** through the tunnel),
   de-duplicates the filename Django-style (append an 8-hex UUID suffix on collision), and
   returns `{ nodeId, name, token }`. The **`bucket`** selects the target folder via the
-  registry in `srv/lib/buckets.js` (`OPENTEXT_BUCKETS`) — see
+  registry in `srv/lib/buckets.js` (`OPENTEXT_BUCKETS`), and the write is authorized by the
+  caller's **derived `azp`** against that bucket's `allowedWriters` — see
   [Bucket registry](#bucket-registry-opentext_buckets) below.
 - **Vue SPA** (`app/frontend/src/App.vue` + `cap.js`) — fetches `documents()`, renders the
   rows grouped (Facturas / Consumo / Otros), each with an **Open PDF** link to
@@ -181,20 +186,88 @@ Ingest is **bucket-per-app** (task 0005): the caller names a `bucket` and the re
 opaque namespace — it says *where* a document goes, never *what it means*.
 
 ```bash
-OPENTEXT_BUCKETS='{"invoices":{"folderNode":5816},"statements":{"folderNode":5817}}'
+OPENTEXT_BUCKETS='{"invoices":{"folderNode":5816,"allowedWriters":["app-a-client-id"]},"statements":{"folderNode":5817,"allowedWriters":["app-b-client-id"]}}'
 ```
 
 Folder nodes are **pre-provisioned** — create the folder in OTCS and put its node id here
-(self-provisioning by name is task 0006). Rejections:
+(self-provisioning by name is task 0006).
+
+`allowedWriters` is the per-bucket **writer ACL** (task 0007): the OAuth `azp` values allowed
+to write that bucket. The caller's identity is **derived** from its IAS token, never declared
+— there is no `app`/`source` body field, and the action rejects one outright. A bucket with
+no `allowedWriters` accepts **no** writers: there is no wildcard and no open-by-default,
+because the whole point of a bucket is that one app cannot write another's. Rejections:
 
 | Case | Status | Why |
 |---|---|---|
-| bucket not in the registry | `400` | caller's mistake; the message does **not** list the configured buckets (no namespace enumeration) |
-| `bucket` missing from the body | `400` | there is **no** default folder — the registry is the only source of truth |
+| caller's `azp` not in the bucket's `allowedWriters` | `403` | the isolation the bucket model exists for |
+| bucket not in the registry | `403` | same status as "forbidden" on purpose — a `400` here would let a caller enumerate other apps' namespaces one probe at a time |
+| no `azp` on the caller's token | `403` | provenance must be present at the boundary; a missing claim is never a grant |
+| `bucket` missing from the body | `400` | a malformed request, not an authorization question — and no name to confirm |
 | `OPENTEXT_BUCKETS` malformed | `500` | a broken deployed config is ours, not the caller's |
+
+The `403` fires before any OpenText call, so a denied write never touches (or creates) a
+folder. Its response body says only `not authorized to write this bucket` — the log line
+carries which of "no claim" / "unknown bucket" / "not yours" it actually was, along with the
+caller's `azp`.
 
 Entries are validated eagerly on first use, so a typo in an unused bucket still surfaces on
 the first upload.
+
+#### Writing locally (the dev `azp`)
+
+The ACL applies locally too, so a developer needs an `azp` to upload anything. One is
+configured out of the box — no per-developer setup:
+
+- `.cdsrc.json` gives two mock users their own `authInfo.token.azp` under the `hybrid` profile,
+  so ingest logs say which caller wrote:
+  - **`admin`** / password `admin` → `local-dev-caller-admin`. This is what the browser's login
+    dialog asks for when the portal is served by `cds watch` at
+    `http://localhost:4004/frontend/index.html`, and the one `.env.example` authorizes.
+  - **`alice`** / empty password → `local-dev-caller-alice`. What
+    `app/frontend/vite.config.js` proxies as when the SPA runs on its own (`:5173`).
+- `.env.example` grants **only `local-dev-caller-admin`** on `invoices`, so `cp .env.example .env`
+  lets the portal upload out of the box. To write as `alice` (Insomnia, curl, or the `:5173`
+  SPA), add `local-dev-caller-alice` to that bucket's `allowedWriters` in your own `.env`.
+- `statements` deliberately keeps a fake azp, so the cross-bucket `403` that task 0007 exists
+  to enforce stays verifiable locally.
+- Any *other* mock user (`bob`, or any name CAP's `*` wildcard accepts) still authenticates and
+  can list documents, but carries no `azp`, so its uploads fail with
+  `403 no azp claim on the caller token`. That is the control working, not a misconfiguration.
+
+```bash
+cp .env.example .env
+npm run watch:hybrid   # the project needs BTP services, so: hybrid
+# then open http://localhost:4004/frontend/index.html and log in as `admin` / `admin`
+```
+
+Or against the API directly, no SPA involved — same credentials the portal dialog takes:
+
+```bash
+curl -u admin:admin -X POST http://localhost:4004/odata/v4/ingest/uploadDocument \
+  -H 'Content-Type: application/json' \
+  -d '{"bucket":"invoices","fileName":"a.pdf","contentBase64":"JVBERi0xLjQK"}'
+```
+
+This exercises the **authorization decision** end to end — `azp` → `mayWrite` → `200`. A mock
+user without an `azp` (say `bob`) gets `403`, so does `alice` until you grant its azp, and so
+does `admin` against `statements`. What it does **not** exercise is signature/issuer
+validation: the mocked `azp` is a plain string, not a signed token. For that, bind a real IAS
+instance (see
+[Hybrid testing](#hybrid-testing-local-code-live-btp-services)).
+
+Mock users are never reachable in production: `NODE_ENV=production` resolves `auth` to `ias`,
+where `authInfo` comes from a verified token and no mock user exists. Verify without deploying:
+
+```bash
+NODE_ENV=production node -e "const cds=require('@sap/cds'); console.log(cds.env.requires.auth.kind, Object.keys(cds.env.requires.auth.users||{}))"
+```
+
+Carrying an `authInfo` on a mock user works by construction, not by documented CAP contract:
+mock users officially take `id`/`password`/`roles`/`attr`/`tenant`/`features`, and `authInfo`
+survives only because CAP spreads the whole user config into `cds.User`. If an upgrade ever
+stops passing it through, local uploads start returning `403` with a message that blames the
+ACL — check this setting first before suspecting the bucket config.
 
 > **The portal's bucket.** The SPA uploads to `invoices` (`app/frontend/src/cap.js`,
 > override at build time with `VITE_INGEST_BUCKET`). That bucket's `folderNode` must equal
@@ -203,8 +276,27 @@ the first upload.
 > document never appears in the listing. Both default to the `5816` "Demo Documents" folder
 > in `.env.example`.
 
-Authorization — which caller may write which bucket — is **not** implemented yet: today any
-authenticated caller may name any configured bucket (task 0007).
+#### Finding a caller's `azp`
+
+A bucket's ACL lists client ids that are **not** in `mta.yaml` and cannot be derived from it.
+Read a caller's real `azp` one of two ways:
+
+- **From the logs.** Every denied upload logs it:
+  `upload denied: azp "<value>" may not write bucket "<name>"` (`cf logs document-delivery-srv`).
+  A successful one carries it too. This is the quickest path for an app already calling ingest.
+- **From the token.** The caller decodes its own JWT payload (base64, not encrypted) and reads
+  the `azp` claim — in the browser's devtools for the portal, or from the token a
+  service-to-service client just fetched.
+
+Copy the value into that bucket's `allowedWriters` and redeploy.
+
+> **The portal's upload 403s until its `azp` is in the ACL.** The SPA is itself an ingest
+> caller, and the `srv-api` destination sets `forwardAuthToken: true` — so the token reaching
+> `srv` is the **forwarded user token**, whose `azp` is the frontend's OIDC client, *not* the
+> `srv` module's own technical client. Deploying 0007 is therefore two steps: deploy, read the
+> azp, put it in `invoices.allowedWriters`, redeploy. Read it **from a browser request** — a
+> service-to-service token carries the technical client's azp instead: a wrong value that
+> looks plausible.
 
 `srv/lib/token.js` is a byte-for-byte port of Python `src/token_redirect.py` — verified by
 cross-interop test (a token minted by either side validates on the other). Keep them in

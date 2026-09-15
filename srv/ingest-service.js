@@ -40,6 +40,51 @@ async function uniqueName(folderId, fileName) {
   return renamed;
 }
 
+/**
+ * Derive the caller's OAuth authorized party; '' when the token carries no claim.
+ *
+ * `authInfo.token.azp` is the only source. Not `req.user.attr` (absent on the
+ * service-to-service path) and not `token.clientId`, which falls back to `audiences[0]`/`cid`
+ * in xssec v4 — another claim standing in for the authorization key would widen it silently.
+ *
+ * @param {object} user `req.user`
+ * @returns {string} the azp, trimmed, or '' when absent
+ */
+function callerAzp(user) {
+  const azp = user?.authInfo?.token?.azp;
+  return typeof azp === 'string' ? azp.trim() : '';
+}
+
+/**
+ * Flatten control characters so a caller-supplied azp cannot forge a second log line.
+ * Only for display: the ACL is matched against the raw value, never this one.
+ *
+ * @param {string} azp the caller's azp
+ * @returns {string} the azp with CR/LF/tab collapsed to spaces
+ */
+function forLog(azp) {
+  return azp.replace(/[\r\n\t]/g, ' ');
+}
+
+/**
+ * The write-authorization decision. Takes no body — a spoofed field cannot reach it.
+ *
+ * An unknown bucket is denied rather than reported as unknown: a 400-vs-403 split would let a
+ * caller enumerate other apps' namespaces one probe at a time.
+ *
+ * @param {object} user `req.user`
+ * @param {string} bucket bucket named by the caller
+ * @returns {{ok: boolean, azp: string, reason?: string}} `reason` is for the log, not the response
+ */
+function authorizeWrite(user, bucket) {
+  const azp = callerAzp(user);
+  if (!azp) return { ok: false, azp, reason: 'no azp claim on the caller token' };
+  if (!buckets.mayWrite(azp, bucket)) {
+    return { ok: false, azp, reason: `azp "${forLog(azp)}" may not write bucket "${bucket}"` };
+  }
+  return { ok: true, azp };
+}
+
 module.exports = class IngestService extends cds.ApplicationService {
   init() {
     this.on('uploadDocument', async (req) => {
@@ -48,6 +93,25 @@ module.exports = class IngestService extends cds.ApplicationService {
       } = req.data;
       if (!fileName) return req.reject(400, 'fileName is required');
       if (!contentBase64) return req.reject(400, 'contentBase64 is required');
+      // A malformed request, not an authorization question — and no name to confirm.
+      if (!bucket || !bucket.trim()) return req.reject(400, 'bucket is required');
+
+      // Before resolveBucket: resolving a self-provisioned bucket creates a folder in
+      // OpenText, so a denied caller must never reach it.
+      let auth;
+      try {
+        auth = authorizeWrite(req.user, bucket);
+      } catch (err) {
+        // A broken OPENTEXT_BUCKETS surfaces here first — still a 500, never a 403.
+        LOG.error('bucket registry misconfigured:', err.message);
+        return req.reject(500, 'bucket registry is misconfigured');
+      }
+      if (!auth.ok) {
+        // The log distinguishes no-claim / unknown / not-yours; the response collapses all three.
+        LOG.warn(`upload denied: ${auth.reason}`);
+        return req.reject(403, 'not authorized to write this bucket');
+      }
+      const from = `azp "${forLog(auth.azp)}"`;
 
       // Resolve the target folder BEFORE reading the payload: an unknown bucket must cost
       // nothing (both caller-blaming rejections below are decided by a sync Map lookup, so
@@ -57,22 +121,21 @@ module.exports = class IngestService extends cds.ApplicationService {
       try {
         ({ folderNode } = await buckets.resolveBucket(bucket));
       } catch (err) {
-        // A caller naming a bucket we don't have is a 400; a broken deployed config is
-        // ours, not theirs — surface it as a 500 rather than blaming the request.
-        // Log the 400s too: "uploads started failing" needs something to correlate against
-        // (0007 adds the caller's azp here, which is what makes this actionable).
+        // Unreachable since 0007: the guard above rejects an empty bucket and `mayWrite`
+        // only grants a bucket the registry holds, so neither code can surface here. Kept as
+        // belt-and-braces — an unknown bucket answers 403 at the gate, never 400.
         if (err.code === 'BUCKET_REQUIRED' || err.code === 'UNKNOWN_BUCKET') {
-          LOG.warn(`upload rejected: ${err.message}`);
+          LOG.warn(`upload rejected (${from}): ${err.message}`);
           return req.reject(400, err.message);
         }
         // A self-provisioned bucket whose folder OpenText won't resolve or create is an
         // upstream failure, not a bad config — same 502 the upload path gives (0006).
         if (err.code === 'FOLDER_PROVISION_FAILED') {
           const reason = opentext.describeError(err);
-          LOG.error('folder provisioning failed:', reason);
+          LOG.error(`folder provisioning failed (${from}):`, reason);
           return req.reject(502, `OpenText folder provisioning failed: ${reason}`);
         }
-        LOG.error('bucket registry misconfigured:', err.message);
+        LOG.error(`bucket registry misconfigured (${from}):`, err.message);
         return req.reject(500, 'bucket registry is misconfigured');
       }
 
@@ -97,12 +160,12 @@ module.exports = class IngestService extends cds.ApplicationService {
         const tok = await token.makeToken(nodeId, { ttlDays: TOKEN_TTL_DAYS });
         LOG.info(
           `uploaded "${fileName}" as "${name}" -> node ${nodeId} `
-            + `in bucket "${bucket}" (folder ${folderNode}, ${buffer.length} bytes)`,
+            + `in bucket "${bucket}" (folder ${folderNode}, ${buffer.length} bytes, ${from})`,
         );
         return { nodeId, name, token: tok };
       } catch (err) {
         const reason = opentext.describeError(err);
-        LOG.error('upload failed:', reason);
+        LOG.error(`upload failed (${from}):`, reason);
         LOG.error(err.stack || err);
         return req.reject(502, `OpenText upload failed: ${reason}`);
       }
@@ -111,3 +174,6 @@ module.exports = class IngestService extends cds.ApplicationService {
     return super.init();
   }
 };
+
+// Exposed for unit tests: mocked auth cannot produce an azp claim.
+module.exports.authorizeWrite = authorizeWrite;
