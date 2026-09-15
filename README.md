@@ -53,6 +53,10 @@ The `SHARED_LINK_SECRET` value **must be byte-identical** to the Python side
 (`../python/opentext-cdn-prototype/.env`, 64 chars) or every existing sharing token
 breaks — see the cross-side interop contract in that repo's `CLAUDE.md`.
 
+To upload through the portal locally you also need a caller `azp`, since ingest is
+ACL-checked (task 0007). One ships with the repo — see
+[Writing locally (the dev `azp`)](#writing-locally-the-dev-azp).
+
 ## Secrets during validation (Credential Store deferred)
 
 The Credential Store is a **paid** service, so it's commented out in `mta.yaml` while we
@@ -209,6 +213,61 @@ caller's `azp`.
 
 Entries are validated eagerly on first use, so a typo in an unused bucket still surfaces on
 the first upload.
+
+#### Writing locally (the dev `azp`)
+
+The ACL applies locally too, so a developer needs an `azp` to upload anything. One is
+configured out of the box — no per-developer setup:
+
+- `.cdsrc.json` gives two mock users their own `authInfo.token.azp` under the `hybrid` profile,
+  so ingest logs say which caller wrote:
+  - **`admin`** / password `admin` → `local-dev-caller-admin`. This is what the browser's login
+    dialog asks for when the portal is served by `cds watch` at
+    `http://localhost:4004/frontend/index.html`, and the one `.env.example` authorizes.
+  - **`alice`** / empty password → `local-dev-caller-alice`. What
+    `app/frontend/vite.config.js` proxies as when the SPA runs on its own (`:5173`).
+- `.env.example` grants **only `local-dev-caller-admin`** on `invoices`, so `cp .env.example .env`
+  lets the portal upload out of the box. To write as `alice` (Insomnia, curl, or the `:5173`
+  SPA), add `local-dev-caller-alice` to that bucket's `allowedWriters` in your own `.env`.
+- `statements` deliberately keeps a fake azp, so the cross-bucket `403` that task 0007 exists
+  to enforce stays verifiable locally.
+- Any *other* mock user (`bob`, or any name CAP's `*` wildcard accepts) still authenticates and
+  can list documents, but carries no `azp`, so its uploads fail with
+  `403 no azp claim on the caller token`. That is the control working, not a misconfiguration.
+
+```bash
+cp .env.example .env
+npm run watch:hybrid   # the project needs BTP services, so: hybrid
+# then open http://localhost:4004/frontend/index.html and log in as `admin` / `admin`
+```
+
+Or against the API directly, no SPA involved — same credentials the portal dialog takes:
+
+```bash
+curl -u admin:admin -X POST http://localhost:4004/odata/v4/ingest/uploadDocument \
+  -H 'Content-Type: application/json' \
+  -d '{"bucket":"invoices","fileName":"a.pdf","contentBase64":"JVBERi0xLjQK"}'
+```
+
+This exercises the **authorization decision** end to end — `azp` → `mayWrite` → `200`. A mock
+user without an `azp` (say `bob`) gets `403`, so does `alice` until you grant its azp, and so
+does `admin` against `statements`. What it does **not** exercise is signature/issuer
+validation: the mocked `azp` is a plain string, not a signed token. For that, bind a real IAS
+instance (see
+[Hybrid testing](#hybrid-testing-local-code-live-btp-services)).
+
+Mock users are never reachable in production: `NODE_ENV=production` resolves `auth` to `ias`,
+where `authInfo` comes from a verified token and no mock user exists. Verify without deploying:
+
+```bash
+NODE_ENV=production node -e "const cds=require('@sap/cds'); console.log(cds.env.requires.auth.kind, Object.keys(cds.env.requires.auth.users||{}))"
+```
+
+Carrying an `authInfo` on a mock user works by construction, not by documented CAP contract:
+mock users officially take `id`/`password`/`roles`/`attr`/`tenant`/`features`, and `authInfo`
+survives only because CAP spreads the whole user config into `cds.User`. If an upgrade ever
+stops passing it through, local uploads start returning `403` with a message that blames the
+ACL — check this setting first before suspecting the bucket config.
 
 > **The portal's bucket.** The SPA uploads to `invoices` (`app/frontend/src/cap.js`,
 > override at build time with `VITE_INGEST_BUCKET`). That bucket's `folderNode` must equal

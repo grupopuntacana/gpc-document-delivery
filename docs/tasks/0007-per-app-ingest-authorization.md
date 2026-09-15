@@ -71,9 +71,17 @@ is rejected `403`.
   that are not in `mta.yaml` and cannot be derived from it. No diagnostic endpoint is exposed
   for this: a caller can decode its own token, and the logs cover the operator's side.
 - Tests: the 13 HTTP upload tests were converted to `srv.send` under a constructed
-  `cds.context.user`, because mocked auth cannot produce an `azp` at all (CAP builds `authInfo`
-  only in the `ias`/`jwt` strategies). No seam was added to production code. `401`/`403` stay
-  asserted over HTTP.
+  `cds.context.user`, because each case needs two callers with different `azp` and the HTTP
+  client cannot vary basic credentials per request there. No seam was added to production code.
+  `401`/`403` stay asserted over HTTP.
+- **Local development.** Mocked auth *can* carry an `azp`: CAP spreads a mock user's whole
+  config into `cds.User` (`mocked-users.js` → `Object.assign`), so `.cdsrc.json` gives `admin`
+  (the portal's login-dialog identity) and `alice` (proxy/Insomnia) an `authInfo.token.azp`
+  each, under the `hybrid` profile. `.env.example` authorizes `admin`'s, so a fresh clone
+  exercises `azp → mayWrite → 200` from the portal with no per-developer setup; callers without
+  a granted `azp` still get `403`. `authInfo` on a mock user is not a documented CAP contract —
+  it survives only because CAP spreads the whole user config into `cds.User` — so an upgrade
+  that filters unknown keys would make local uploads `403` again.
 
 **Deploy note:** the portal SPA is itself an ingest caller and `srv-api` sets
 `forwardAuthToken: true`, so its `azp` is the frontend OIDC client's — not the `srv` module's.

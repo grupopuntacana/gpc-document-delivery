@@ -10,11 +10,11 @@ const require = createRequire(import.meta.url);
 // mint the returned sharing token.
 //
 // Uploads are driven via `srv.send` under a constructed `cds.context.user` rather than over
-// HTTP: since 0007 the handler authorizes on `req.user.authInfo.token.azp`, and mocked auth
-// cannot produce that claim (CAP builds `authInfo` only in the `ias`/`jwt` strategies). The
-// user carries a real `IdentityServiceToken` — the approach @sap/xssec's README prescribes
-// for local tests — so no seam is needed in production code. The HTTP client stays for the
-// tests that are about the HTTP contract itself (401/403).
+// HTTP: since 0007 the handler authorizes on `req.user.authInfo.token.azp`, and these tests
+// need two distinct callers per case, which basic auth cannot vary per request here. The user
+// carries a real `IdentityServiceToken` — the approach @sap/xssec's README prescribes for
+// local tests — so no seam is needed in production code. The HTTP client stays for the tests
+// that are about the HTTP contract itself (401/403).
 process.env.SHARED_LINK_SECRET = 'x'.repeat(64);
 process.env.OPENTEXT_FOLDER_ID = '52480';
 // Two buckets on DIFFERENT folder nodes — the point of the slice is that each lands in its

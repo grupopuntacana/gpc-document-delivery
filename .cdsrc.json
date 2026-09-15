@@ -2,7 +2,19 @@
   "requires": {
     "destinations": true,
     "[hybrid]": {
-      "auth": "mocked"
+      "auth": {
+        "kind": "mocked",
+        "users": {
+          "alice": {
+            "authInfo": { "token": { "azp": "local-dev-caller-alice" } }
+          },
+          "admin": {
+            "password": "admin",
+            "roles": ["admin"],
+            "authInfo": { "token": { "azp": "local-dev-caller-admin" } }
+          }
+        }
+      }
     }
   }
 }
