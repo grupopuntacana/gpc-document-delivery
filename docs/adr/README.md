@@ -12,6 +12,8 @@ repo is self-contained, the prototype is archival.
 |---|-------|--------|
 | [0001](0001-document-sharing-pattern.md) | Document sharing pattern (stable URL → short-lived signed URL) | Accepted |
 | [0005](0005-shared-delivery-ingest-service.md) | Document delivery + ingest as a shared CAP service on BTP | Proposed |
+| [0006](0006-delivery-link-authorization.md) | Delivery-link authorization: opaque document reference + two-tier ownership | Proposed (amended by 0007) |
+| [0007](0007-plugin-ingest-app-private-noderef.md) | Attachments-plugin ingest: app-private `nodeId` + folder-guarded share-link | Proposed |
 
 ## The gap at 0002–0004
 
