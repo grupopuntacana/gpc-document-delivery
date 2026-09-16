@@ -1,6 +1,14 @@
 # 0008 — Opaque document reference + `linkFor` (claim-check, DB-backed)
 
-**Status:** todo
+> **Status: DONE, and AMENDED by [ADR 0008](../adr/0008-bucket-scoped-cross-app-reads.md)
+> (shipped v1.1.0).** This task's owner-only model — `mayRead` *"initially `= mayWrite`,
+> owner-only"* and the *"a row the caller's bucket owns"* / *"different-bucket app → 404"*
+> acceptance criteria below — is **superseded**. As shipped: a bucket has separate
+> `allowedWriters` / `allowedReaders`, `mayRead = readers ∪ writers`, the read gate is bucket
+> membership (not `ownerAzp`), and the write-side claim is a standalone `register(bucket, nodeId)`
+> action. Read this for the `docId`/claim-check lineage; read ADR 0008 for the current behavior.
+
+**Status:** done (superseded in part by ADR 0008)
 **Depends on:** [0005](0005-bucket-model-folder-routing.md) (bucket registry, `azp → bucket`);
 the family Auth kernel (`azp` resolution, see task 0007's open decision). Introduces the
 persistence [0009](0009-ownership-registry-customer-scope.md) and

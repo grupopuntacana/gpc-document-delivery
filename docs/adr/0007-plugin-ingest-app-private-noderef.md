@@ -1,6 +1,10 @@
 # ADR 0007 — Attachments-plugin ingest: app-private `nodeId` + folder-guarded share-link
 
-- **Status:** Proposed
+- **Status:** Proposed — **amended by [ADR 0008](0008-bucket-scoped-cross-app-reads.md)**, which
+  shipped the folder-guarded claim as a standalone `register(bucket, nodeId)` action (not a
+  widened `linkFor`) and added a per-bucket **reader** ACL so a node uploaded by one app can be
+  delivered by another. The claim here stays writer-authorized; the read gate moved to `mayRead`
+  (readers ∪ writers), not ownership.
 - **Date:** 2026-09-15
 - **Deciders:** Felix De Gracia; to be ratified by the SAP architecture review.
 - **Lineage:** Extends and **amends** [ADR 0006](0006-delivery-link-authorization.md), which
@@ -122,13 +126,15 @@ two jobs must be split by **audience**, not folded into one token.
 
 ## Open items (tracked as tasks)
 
-- **Widen `linkFor` to a folder-guarded claim** over a directly-uploaded node (the app-to-app
-  accept-side), upserting the `Document` row lazily → amend / extend task
-  [0008](../tasks/0008-linkfor-delivery-link.md).
-- **OpenText client: read a node's parent folder** to authorize the claim → transport addition
-  (twin of the `deleteDocument`/`existsNode` the plugin backend already added).
-- **`@gpc/attachments-opentext`: record the app-private-`nodeId` invariant** (its README "not in
-  scope") — done alongside this ADR.
+> **Resolved by [ADR 0008](0008-bucket-scoped-cross-app-reads.md) / shipped in v1.1.0.** The first
+> three items below are done; kept for lineage. The folder-guarded claim shipped as a standalone
+> `register(bucket, nodeId) → { docId }` action (writer-authorized), **not** a widened `linkFor`;
+> `linkFor` stayed opaque and read-only, now authorized by `mayRead` (readers ∪ writers).
+
+- **~~Widen `linkFor` to a folder-guarded claim~~** → shipped instead as `register` +
+  `linkForNode` (register+mint), lazily upserting the `Documents` row. See ADR 0008.
+- **~~OpenText client: read a node's parent folder~~** → shipped (`getParentId`/`nodeInFolder`).
+- **~~`@gpc/attachments-opentext`: record the app-private-`nodeId` invariant~~** → done.
 - **Per-app lazy-vs-eager registration** decision → default lazy; revisit per consumer.
 
 ## References

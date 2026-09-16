@@ -1,6 +1,14 @@
 # 0009 — Customer-scoped read/list + revocation + fetch audit (the `ownerId` dimension)
 
-**Status:** todo
+> **Status: NEEDS REDESIGN against [ADR 0008](../adr/0008-bucket-scoped-cross-app-reads.md).**
+> This task puts **customer-scoping inside document-delivery** (`linkFor` succeeds only if
+> `row.ownerId == caller.customerId`, `listFor(ownerId)`, a per-customer portal filter). ADR 0008
+> reframes that: *"customer-scoping is the consuming app's business logic"* and *"a customer
+> reading their own invoice directly is a different surface — not this one."* The `ownerId`
+> dimension likely moves to the consuming app; revocation + fetch audit (the parts that DO belong
+> here) can be split out. Do not implement as written — re-derive from ADR 0008 first.
+
+**Status:** todo — pending redesign per ADR 0008
 **Depends on:** [0008](0008-linkfor-delivery-link.md) (opaque `docId` + `Document` row +
 `linkFor`); [0005](0005-bucket-model-folder-routing.md) (bucket registry). Shares its store and
 revocation/audit with [0004](0004-revocable-tokens-audit.md).

@@ -2,7 +2,11 @@
 
 - **Status:** Proposed — **amended by [ADR 0007](0007-plugin-ingest-app-private-noderef.md)**
   (which adds the `@cap-js/attachments` plugin ingest path and relaxes the "never accept a
-  `nodeId`" rule to "never from a client/untrusted caller").
+  `nodeId`" rule to "never from a client/untrusted caller") **and by
+  [ADR 0008](0008-bucket-scoped-cross-app-reads.md)** (which decouples the *read* gate from
+  ownership: a bucket has separate reader/writer ACLs, `mayRead = readers ∪ writers`, and a doc
+  uploaded by app X may be delivered by app Y; `ownerAzp` becomes audit/revoke only — see the
+  note on Decision 4 below).
 - **Date:** 2026-09-01
 - **Deciders:** Felix De Gracia; to be ratified by the SAP architecture review.
 - **Lineage:** Extends [ADR 0005](0005-shared-delivery-ingest-service.md), which built the

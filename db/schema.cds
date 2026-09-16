@@ -24,8 +24,9 @@ entity Documents {
       bucket    : String     not null;
       // The app azp that owns the row, derived from its IAS token at ingest/claim (DoD-2).
       ownerAzp  : String     not null;
-      // Reserved for task 0009 (customer scope). Written by nothing in this slice; a row with
-      // no ownerId is app-only, no customer can claim it. Left here so 0009 extends, not alters.
+      // Reserved for the customer dimension (task 0009, pending redesign per ADR 0008 — customer
+      // scoping likely moves to the consuming app). Written by nothing in this slice; a row with
+      // no ownerId is app-only. Left here so that redesign extends, not alters.
       ownerId   : String     null;
       // Per-document revocation seat (ADR 0006 §5). A revoked row mints no more links.
       revoked   : Boolean     not null  default false;

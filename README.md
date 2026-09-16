@@ -170,7 +170,9 @@ open them by clicking. Three pieces:
   contentType, contentBase64 }`, uploads a multipart type-144 node to OpenText over the
   Cloud Connector (`opentext.uploadDocument`, the first **write** through the tunnel),
   de-duplicates the filename Django-style (append an 8-hex UUID suffix on collision), and
-  returns `{ nodeId, name, token }`. The **`bucket`** selects the target folder via the
+  returns `{ docId, name, token }` — the opaque `docId` claim-check, never the private
+  `nodeId` (which stays in the `Documents` row and never leaves the service; ADR 0006/0008).
+  The **`bucket`** selects the target folder via the
   registry in `srv/lib/buckets.js` (`OPENTEXT_BUCKETS`), and the write is authorized by the
   caller's **derived `azp`** against that bucket's `allowedWriters` — see
   [Bucket registry](#bucket-registry-opentext_buckets) below.
@@ -186,17 +188,28 @@ Ingest is **bucket-per-app** (task 0005): the caller names a `bucket` and the re
 opaque namespace — it says *where* a document goes, never *what it means*.
 
 ```bash
-OPENTEXT_BUCKETS='{"invoices":{"folderNode":5816,"allowedWriters":["app-a-client-id"]},"statements":{"folderNode":5817,"allowedWriters":["app-b-client-id"]}}'
+OPENTEXT_BUCKETS='{"invoices":{"folderNode":5816,"allowedWriters":["invoice-app-azp"],"allowedReaders":["notifier-app-azp"]},"statements":{"folderNode":5817,"allowedWriters":["app-b-client-id"]}}'
 ```
 
 Folder nodes are **pre-provisioned** — create the folder in OTCS and put its node id here
 (self-provisioning by name is task 0006).
 
-`allowedWriters` is the per-bucket **writer ACL** (task 0007): the OAuth `azp` values allowed
-to write that bucket. The caller's identity is **derived** from its IAS token, never declared
-— there is no `app`/`source` body field, and the action rejects one outright. A bucket with
-no `allowedWriters` accepts **no** writers: there is no wildcard and no open-by-default,
-because the whole point of a bucket is that one app cannot write another's. Rejections:
+Each bucket has **two per-app ACLs** (task 0007, [ADR 0008](docs/adr/0008-bucket-scoped-cross-app-reads.md)),
+mirroring S3's split of `s3:PutObject` from `s3:GetObject`:
+
+- `allowedWriters` — the OAuth `azp` values allowed to **ingest/claim** into the bucket.
+- `allowedReaders` — the `azp` values allowed to **read back and mint delivery links**.
+
+A **writer implies read; a reader does not imply write**, so `mayWrite` = `allowedWriters` and
+`mayRead` = `allowedReaders ∪ allowedWriters`. This is what lets a document **uploaded by app X
+be delivered by app Y** (X a writer, Y a reader of the same bucket) — the classic invoice
+generator → notifier flow. The caller's identity is **derived** from its IAS token, never
+declared — there is no `app`/`source` body field, and the action rejects one outright. A bucket
+with no `allowedWriters` accepts **no** writers, and with no `allowedReaders` grants read only
+to its writers: there is no wildcard and no open-by-default, because the whole point of a bucket
+is that one app cannot touch another's. **Real per-app ACLs belong in the deployable descriptor
+(`secrets.mtaext` / `mta.yaml`), not `cf set-env`** — an imperative env var is reverted to the
+descriptor's placeholder on every redeploy. Write rejections:
 
 | Case | Status | Why |
 |---|---|---|
@@ -304,6 +317,29 @@ sync if either changes.
 
 Listing real data requires a live OpenText destination, so run it **hybrid** (`cds bind`)
 or deployed — same as the Python demo needs live OpenText.
+
+## Delivery links (`LinkService`) — the read/claim surface
+
+`LinkService` (`srv/link-service.{cds,js}`, `@path: link`) turns a durable handle into a fresh,
+short-lived `/invoice/{token}` delivery link ([ADR 0006](docs/adr/0006-delivery-link-authorization.md)
+/ [0008](docs/adr/0008-bucket-scoped-cross-app-reads.md)). All three actions are
+`@requires: 'authenticated-user'` (service-to-service IAS auth); the anonymous leg is the
+separate `/invoice/{token}` route. No entity is exposed — the store stays un-queryable, and a
+raw `nodeId` is never accepted or returned.
+
+- **`register(bucket, nodeId) → { docId }`** — the **write-side** claim. A **writer** of the
+  bucket (`mayWrite`) claims a node it uploaded directly through the `@gpc/attachments-opentext`
+  plugin (which leaves no `Documents` row), folder-guarded (the node must sit in the bucket's
+  folder), and gets back the opaque `docId` to store in its own domain table. Mints no link.
+- **`linkFor(docId, ttlDays?) → { deliveryUrl, expiresAt }`** — the **read-side**, client-safe
+  path. Resolves the opaque `docId`, authorizes the caller as a **reader** of the row's bucket
+  (`mayRead` = readers ∪ writers), and mints a fresh link — so a doc uploaded by app X is
+  delivered by app Y when Y is a reader. `ownerAzp` is audit/revoke only; it does not gate reads.
+- **`linkForNode(bucket, nodeId, ttlDays?)`** — the write-side convenience: `register` + mint in
+  one call, for an app that both uploads and delivers its own node.
+
+`ttlDays` is optional; omitted, the token defaults to `LINKFOR_TOKEN_TTL_HOURS` (24h), never the
+30-day `makeToken` default — the delivery credential is short-lived (re-mint on demand).
 
 ## Portal UI (`app/frontend`)
 
