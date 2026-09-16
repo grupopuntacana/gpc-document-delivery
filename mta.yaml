@@ -1,6 +1,6 @@
 _schema-version: 3.3.0
 ID: document-delivery
-version: 1.0.0
+version: 0.6.0
 description: "GPC Document Delivery."
 parameters:
   enable-parallel-deployments: true
