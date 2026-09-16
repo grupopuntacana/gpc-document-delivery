@@ -24,9 +24,13 @@ const deps = {
 };
 
 // The delivery credential is SHORT-LIVED (ADR 0006 §3): a fresh /invoice/{token} minted per
-// call, measured in hours. NEVER the 30-day makeToken default — a leaked link is bounded by
-// this TTL. Callers may pass an explicit `ttlDays`; when they don't, this is the default.
-const LINKFOR_TOKEN_TTL_HOURS = Number(process.env.LINKFOR_TOKEN_TTL_HOURS || 4);
+// call. The model is re-mint-on-demand — a consumer (a list view, a page render) asks for a
+// link when it shows an object and asks again when it refreshes, so the link only has to
+// outlive the view that requested it. 24h is the safe default for that: long enough for a human
+// to click within the day, short enough that a leaked link dies fast. NEVER the 30-day
+// makeToken default. A caller that needs a link to persist (emailed, ticketed) passes an
+// explicit `ttlDays`; one that needs it shorter does the same.
+const LINKFOR_TOKEN_TTL_HOURS = Number(process.env.LINKFOR_TOKEN_TTL_HOURS || 24);
 
 // Where the anonymous deliver route lives (srv/server.js `GET /invoice/:token`). Absolute when
 // DELIVERY_BASE_URL is set (the deployed srv route); otherwise a root-relative path, which is
