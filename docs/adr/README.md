@@ -12,10 +12,9 @@ repo is self-contained, the prototype is archival.
 |---|-------|--------|
 | [0001](0001-document-sharing-pattern.md) | Document sharing pattern (stable URL → short-lived signed URL) | Accepted |
 | [0005](0005-shared-delivery-ingest-service.md) | Document delivery + ingest as a shared CAP service on BTP | Proposed |
+| [0006](0006-delivery-link-authorization.md) | Delivery-link authorization: opaque document reference + two-tier ownership | Proposed (amended by 0007, 0008) |
+| [0007](0007-plugin-ingest-app-private-noderef.md) | Attachments-plugin ingest: app-private `nodeId` + folder-guarded share-link | Proposed (amended by 0008) |
 | [0008](0008-bucket-scoped-cross-app-reads.md) | Bucket-scoped reader/writer grants for cross-app document delivery (S3-aligned) + `register` | Proposed |
-
-> ADRs 0006 (opaque `docId` claim-check) and 0007 (plugin-ingest / app-private node reference)
-> land with the delivery-link-authorization branch; 0008 extends 0006 and amends 0007.
 
 ## The gap at 0002–0004
 

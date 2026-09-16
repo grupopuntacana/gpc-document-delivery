@@ -17,6 +17,8 @@ table. When a Git remote exists, these can be lifted into real issues verbatim.
 
 | # | Task | Status |
 |---|------|--------|
+| [0009](0009-ownership-registry-customer-scope.md) | Customer-scoped read/list + revocation + fetch audit (ADR 0006) | todo |
+| [0008](0008-linkfor-delivery-link.md) | Opaque document reference + `linkFor` (claim-check, DB-backed) (ADR 0006) | todo |
 | [0007](0007-per-app-ingest-authorization.md) | Per-app ingest authorization (which app may write which bucket) | done |
 | [0006](0006-find-or-create-bucket-folder.md) | Find-or-create a bucket's OpenText folder (self-provisioning) | done |
 | [0005](0005-bucket-model-folder-routing.md) | Bucket model + folder routing (the proving vertical) | done |
