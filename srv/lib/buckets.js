@@ -9,15 +9,21 @@
  * of two ways — exactly one, never both:
  *
  *   OPENTEXT_BUCKETS='{
- *     "invoices":   {"folderNode": 52480, "allowedWriters": ["app-a-client-id"]},
+ *     "invoices":   {"folderNode": 52480,
+ *                    "allowedWriters": ["invoice-app-azp"],
+ *                    "allowedReaders": ["notifier-app-azp"]},
  *     "statements": {"parentNode": 5816, "folderName": "statements",
  *                    "allowedWriters": ["app-b-client-id"]}
  *   }'
  *
- * `allowedWriters` is the per-bucket writer ACL (task 0007), orthogonal to how the bucket
- * names its folder: it lists the OAuth `azp` values allowed to write the bucket. A bucket
- * with no `allowedWriters` accepts **no** writers — there is no wildcard and no
- * open-by-default, since the point of a bucket is that one app cannot write another's.
+ * Each bucket has TWO per-app ACLs (ADR 0008), mirroring S3's split of `s3:PutObject` from
+ * `s3:GetObject`, orthogonal to how the bucket names its folder:
+ *   - `allowedWriters` — the OAuth `azp` values allowed to ingest/claim into the bucket.
+ *   - `allowedReaders` — the `azp` values allowed to read back and re-mint delivery links.
+ * A writer implies read; a reader does NOT imply write. This is what lets a document uploaded
+ * by app X be delivered by app Y (X a writer, Y a reader of the same bucket). A bucket with no
+ * `allowedWriters` accepts **no** writers, and one with no `allowedReaders` grants read only to
+ * its writers — there is no wildcard and no open-by-default: one app cannot touch another's.
  *
  * `folderNode` points at a folder an operator created by hand. `parentNode` + `folderName`
  * lets the bucket create its own folder on first use (task 0006) — no OpenText click-ops
@@ -90,17 +96,21 @@ function nodeId(bucket, field, configured) {
 }
 
 /**
- * Validate a bucket's writer ACL into a Set of azp values. Absent or `[]` is legal config and
- * leaves the bucket un-writable — never open.
+ * Validate one of a bucket's ACLs (`allowedWriters` or `allowedReaders`) into a Set of azp
+ * values. Absent or `[]` is legal config and leaves that ACL empty — never open.
  *
  * A non-array or a blank entry is a config error rather than a lenient read: an ACL an
  * operator believes grants access but doesn't is the failure this guards against.
+ *
+ * @param {string} bucket bucket name (for the error message)
+ * @param {string} field the ACL field name — 'allowedWriters' | 'allowedReaders'
+ * @param {*} configured the raw value from the parsed config
  */
-function writerAcl(bucket, configured) {
+function aclSet(bucket, field, configured) {
   if (configured === undefined) return new Set();
   if (!Array.isArray(configured)) {
     throw configError(
-      `${BUCKETS_ENV}: bucket "${bucket}" has an invalid allowedWriters `
+      `${BUCKETS_ENV}: bucket "${bucket}" has an invalid ${field} `
         + `(must be an array of azp strings): ${JSON.stringify(configured)}`,
     );
   }
@@ -108,7 +118,7 @@ function writerAcl(bucket, configured) {
     const trimmed = typeof azp === 'string' ? azp.trim() : '';
     if (!trimmed) {
       throw configError(
-        `${BUCKETS_ENV}: bucket "${bucket}" has an invalid allowedWriters entry: ${JSON.stringify(azp)}`,
+        `${BUCKETS_ENV}: bucket "${bucket}" has an invalid ${field} entry: ${JSON.stringify(azp)}`,
       );
     }
     return trimmed;
@@ -159,10 +169,13 @@ function registry() {
       );
     }
 
-    const allowedWriters = writerAcl(name, entry.allowedWriters);
+    const allowedWriters = aclSet(name, 'allowedWriters', entry.allowedWriters);
+    const allowedReaders = aclSet(name, 'allowedReaders', entry.allowedReaders);
 
     if (hasFolderNode) {
-      return [name, { folderNode: nodeId(name, 'folderNode', entry.folderNode), allowedWriters }];
+      return [name, {
+        folderNode: nodeId(name, 'folderNode', entry.folderNode), allowedWriters, allowedReaders,
+      }];
     }
 
     const folderName = typeof entry.folderName === 'string' ? entry.folderName.trim() : '';
@@ -172,7 +185,7 @@ function registry() {
       );
     }
     return [name, {
-      parentNode: nodeId(name, 'parentNode', entry.parentNode), folderName, allowedWriters,
+      parentNode: nodeId(name, 'parentNode', entry.parentNode), folderName, allowedWriters, allowedReaders,
     }];
   }));
   return _registry;
@@ -249,13 +262,16 @@ function mayWrite(azp, bucket) {
 }
 
 /**
- * May this caller MINT a delivery link for a document in this bucket? The read-side twin of
- * `mayWrite` (task 0008): an app's read scope is its own bucket, so an app that may write a
- * bucket may re-mint links over it, and no one else.
+ * May this caller MINT a delivery link for a document in this bucket (ADR 0008)? A bucket has
+ * TWO ACLs, mirroring S3's split of `s3:PutObject` from `s3:GetObject`:
+ *   - `allowedWriters` — apps that ingest/claim into the bucket (the S3 "owner"/PutObject).
+ *   - `allowedReaders` — apps that may read back and re-mint links (S3 GetObject).
+ * A writer implies read (it owns what it wrote), so read authority is `readers ∪ writers`.
  *
- * Deliberately `= mayWrite` for now — one owner-only ACL, not a second one to keep in sync.
- * It is a distinct export so the read decision has its own name at every call site; if read
- * and write authority ever diverge (e.g. a read-only consumer azp), only this changes.
+ * This is what lets a document uploaded by app X be delivered by app Y: X is a writer, Y is a
+ * reader of the same bucket, and the ownership row (`ownerAzp`) stays X for audit/revoke while
+ * the read gate is bucket membership, not ownership. A reader is NOT a writer — it can mint
+ * links but cannot ingest or claim (`mayWrite` stays writers-only).
  *
  * Same failure-closed, total, synchronous contract as `mayWrite`.
  *
@@ -265,7 +281,12 @@ function mayWrite(azp, bucket) {
  * @throws `BUCKET_CONFIG_INVALID` when the deployed registry is broken
  */
 function mayRead(azp, bucket) {
-  return mayWrite(azp, bucket);
+  if (typeof azp !== 'string' || !azp.trim()) return false;
+  if (typeof bucket !== 'string' || !bucket.trim()) return false;
+  const entry = registry().get(bucket);
+  if (!entry) return false;
+  const a = azp.trim();
+  return entry.allowedReaders.has(a) || entry.allowedWriters.has(a);
 }
 
 module.exports = {

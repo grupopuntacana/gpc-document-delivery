@@ -83,10 +83,13 @@ module.exports = class LinkService extends cds.ApplicationService {
     const { Documents } = cds.entities('gpc.documentdelivery');
 
     /**
-     * linkFor(docId) — the client-safe re-mint path. Resolve the opaque claim-check, authorize
-     * the caller against the row's bucket, mint a fresh short-lived link. A raw nodeId is never
-     * accepted or returned. Unknown / non-owned / revoked all collapse to 404 (mint nothing,
-     * do not confirm a docId the caller may not see — ADR 0006 §4).
+     * linkFor(docId) — the client-safe re-mint path (READ side, ADR 0006/0008). Resolve the
+     * opaque claim-check, authorize the caller as a READER of the row's bucket (`mayRead` =
+     * readers ∪ writers), mint a fresh short-lived link. This is the cross-app path: a doc
+     * uploaded/owned by app X is delivered by app Y when Y is a reader of X's bucket — the
+     * `ownerAzp` on the row is X for audit/revoke, but it does not gate the read. A raw nodeId
+     * is never accepted or returned. Unknown / not-a-reader / revoked all collapse to 404 (mint
+     * nothing, do not confirm a docId the caller may not see — ADR 0006 §4).
      */
     this.on('linkFor', async (req) => {
       const azp = callerAzp(req.user);
@@ -100,7 +103,7 @@ module.exports = class LinkService extends cds.ApplicationService {
 
       const row = await SELECT.one.from(Documents).where({ docId });
       if (!row || row.revoked || !buckets.mayRead(azp, row.bucket)) {
-        LOG.warn(`linkFor denied for azp "${azp}" (docId not found, not owned, or revoked)`);
+        LOG.warn(`linkFor denied for azp "${azp}" (docId not found, not a reader, or revoked)`);
         return req.reject(404, 'not found');
       }
 
@@ -110,20 +113,18 @@ module.exports = class LinkService extends cds.ApplicationService {
     });
 
     /**
-     * linkForNode(bucket, nodeId) — the ADR 0007 §6 folder-guarded claim. A trusted app-to-app
-     * caller shares a node it uploaded directly (via @cap-js/attachments), for which no
-     * Documents row exists yet.
+     * The WRITE-side claim shared by `register` and `linkForNode` (ADR 0007 §6, ADR 0008). A
+     * trusted app-to-app WRITER claims a node it uploaded directly via @cap-js/attachments, for
+     * which no Documents row exists yet. Two independent checks: (1) the caller must be a WRITER
+     * of the named bucket (`mayWrite`) — claiming is a write-authority act, so a read-only
+     * consumer cannot mint ownership; (2) the node must actually sit in that bucket's folder
+     * (`nodeInFolder`). Either failing is a 404 (never an oracle, never bucket enumeration by
+     * status code). The row is then upserted LAZILY so the document is revocable/auditable.
      *
-     * API choice: a SEPARATE action, not an optional nodeId on linkFor. Accepting a nodeId is
-     * the sensitive move ADR 0006 designed away, so it lives on its own explicitly-named,
-     * authenticated surface — the client-facing linkFor stays opaque-only. Authorization is
-     * two independent checks: (1) the caller must own the named bucket (`mayRead`), so it can
-     * only ever name its OWN folder; (2) the node must actually sit in that folder
-     * (`nodeInFolder`). Either failing is a 404 — never an oracle over the store, never an
-     * enumeration of buckets by status code. The row is then upserted LAZILY (create-on-first-
-     * share, ADR 0007 §4) so the shared document is revocable/auditable from here on.
+     * Returns `{ docId, nodeId }`; `req.reject` throws on every failure path, so a caller that
+     * awaits this either gets the claim or the request is already rejected.
      */
-    this.on('linkForNode', async (req) => {
+    const claimNode = async (req, label) => {
       const azp = callerAzp(req.user);
       if (!azp) return req.reject(403, 'caller token carries no azp claim');
 
@@ -131,10 +132,10 @@ module.exports = class LinkService extends cds.ApplicationService {
       if (typeof bucket !== 'string' || !bucket.trim() || nodeId == null) {
         return req.reject(404, 'not found');
       }
-      // The caller may only claim within its own bucket. An unknown bucket and a not-yours
+      // The caller may only claim within a bucket it WRITES. An unknown bucket and a not-yours
       // bucket both fail here, so neither is distinguishable by status code (no enumeration).
-      if (!buckets.mayRead(azp, bucket)) {
-        LOG.warn(`linkForNode denied for azp "${azp}": not a reader of bucket "${bucket}"`);
+      if (!buckets.mayWrite(azp, bucket)) {
+        LOG.warn(`${label} denied for azp "${azp}": not a writer of bucket "${bucket}"`);
         return req.reject(404, 'not found');
       }
 
@@ -144,10 +145,10 @@ module.exports = class LinkService extends cds.ApplicationService {
       } catch (err) {
         if (err.code === 'FOLDER_PROVISION_FAILED') {
           const reason = deps.describeError(err);
-          LOG.error(`linkForNode folder provisioning failed for bucket "${bucket}":`, reason);
+          LOG.error(`${label} folder provisioning failed for bucket "${bucket}":`, reason);
           return req.reject(502, `OpenText folder provisioning failed: ${reason}`);
         }
-        LOG.error(`linkForNode bucket resolution failed for "${bucket}":`, err.message);
+        LOG.error(`${label} bucket resolution failed for "${bucket}":`, err.message);
         return req.reject(500, 'bucket registry is misconfigured');
       }
 
@@ -157,11 +158,11 @@ module.exports = class LinkService extends cds.ApplicationService {
         inFolder = await deps.nodeInFolder(nodeId, folderNode);
       } catch (err) {
         const reason = deps.describeError(err);
-        LOG.error(`linkForNode parent lookup failed for node ${nodeId}:`, reason);
+        LOG.error(`${label} parent lookup failed for node ${nodeId}:`, reason);
         return req.reject(502, `OpenText parent lookup failed: ${reason}`);
       }
       if (!inFolder) {
-        LOG.warn(`linkForNode denied: node ${nodeId} is not in bucket "${bucket}"'s folder`);
+        LOG.warn(`${label} denied: node ${nodeId} is not in bucket "${bucket}"'s folder`);
         return req.reject(404, 'not found');
       }
 
@@ -169,7 +170,7 @@ module.exports = class LinkService extends cds.ApplicationService {
       const existing = await SELECT.one.from(Documents).where({ nodeId, bucket });
       if (existing && existing.revoked) {
         // A revoked node stays revoked — a re-claim must not resurrect a killed link.
-        LOG.warn(`linkForNode denied: node ${nodeId} in bucket "${bucket}" is revoked`);
+        LOG.warn(`${label} denied: node ${nodeId} in bucket "${bucket}" is revoked`);
         return req.reject(404, 'not found');
       }
       let docId = existing && existing.docId;
@@ -183,9 +184,29 @@ module.exports = class LinkService extends cds.ApplicationService {
           revoked: false,
           createdAt: new Date().toISOString(),
         });
-        LOG.info(`linkForNode claimed node ${nodeId} in bucket "${bucket}" as docId ${docId}`);
+        LOG.info(`${label} claimed node ${nodeId} in bucket "${bucket}" as docId ${docId}`);
       }
+      return { docId, nodeId };
+    };
 
+    /**
+     * register(bucket, nodeId) — the WRITE-side claim on its own (ADR 0008). A writer that
+     * uploaded a node directly (via the plugin) claims it and gets back the opaque `docId` to
+     * store in its own domain table. It mints NO link — a reader app later delivers it with
+     * linkFor(docId). This is what decouples "who uploaded" from "who delivers".
+     */
+    this.on('register', async (req) => {
+      const { docId } = await claimNode(req, 'register');
+      return { docId };
+    });
+
+    /**
+     * linkForNode(bucket, nodeId) — the WRITE-side convenience: register + mint in one call,
+     * for the app that both uploads and delivers its own node. Same folder-guarded writer
+     * authorization as `register`; a reader-only app uses linkFor(docId) instead.
+     */
+    this.on('linkForNode', async (req) => {
+      const { nodeId } = await claimNode(req, 'linkForNode');
       const { deliveryUrl, expiresAt } = await mintLink(nodeId, req.data.ttlDays);
       return { deliveryUrl, expiresAt };
     });

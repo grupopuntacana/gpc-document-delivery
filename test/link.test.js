@@ -17,11 +17,16 @@ process.env.LINKFOR_TOKEN_TTL_HOURS = '4';
 
 const INVOICES_FOLDER = 52480;
 const STATEMENTS_FOLDER = 52481;
+const BILLING_FOLDER = 52482;
 const APP_A = 'client-app-a';
 const APP_B = 'client-app-b';
+const APP_C = 'client-app-c'; // no grant on any bucket — the outsider
+// `billing` models the ADR 0008 cross-app case: APP_A (invoice generator) writes it, APP_B
+// (notifier) only reads it. A writer implies read; a reader (APP_B) is NOT a writer.
 process.env.OPENTEXT_BUCKETS = JSON.stringify({
   invoices: { folderNode: INVOICES_FOLDER, allowedWriters: [APP_A] },
   statements: { folderNode: STATEMENTS_FOLDER, allowedWriters: [APP_B] },
+  billing: { folderNode: BILLING_FOLDER, allowedWriters: [APP_A], allowedReaders: [APP_B] },
 });
 
 const cds = require('@sap/cds');
@@ -251,6 +256,79 @@ describe('LinkService', () => {
       cds.context = { user: new cds.User({ id: 'no-azp' }) };
       const err = await link.send({ event: 'linkForNode', data: { bucket: 'invoices', nodeId: 7006 } }).catch((e) => e);
       expect(Number(err.code)).toBe(403);
+    });
+  });
+
+  describe('ADR 0008 — cross-app reads (uploaded by X, delivered by Y) + register', () => {
+    it('register(bucket,nodeId) claims a directly-uploaded node and returns a docId, minting no link', async () => {
+      mockTransport();
+      linkService.deps.nodeInFolder = vi.fn(async () => true);
+      const { data } = await callAs(link, APP_A, 'register', { bucket: 'billing', nodeId: 8801 });
+      expect(data.docId).toBeTruthy();
+      expect(data.deliveryUrl).toBeUndefined(); // register mints nothing
+      expect(linkService.deps.nodeInFolder).toHaveBeenCalledWith(8801, BILLING_FOLDER);
+      const rows = await SELECT.from(DOCUMENTS).where({ nodeId: 8801, bucket: 'billing' });
+      expect(rows).to.have.length(1);
+      expect(rows[0].ownerAzp).to.equal(APP_A); // owner is the writer that registered it
+    });
+
+    it('register is idempotent — a second claim returns the same docId, no duplicate row', async () => {
+      mockTransport();
+      const first = await callAs(link, APP_A, 'register', { bucket: 'billing', nodeId: 8802 });
+      const second = await callAs(link, APP_A, 'register', { bucket: 'billing', nodeId: 8802 });
+      expect(second.data.docId).to.equal(first.data.docId);
+      const rows = await SELECT.from(DOCUMENTS).where({ nodeId: 8802, bucket: 'billing' });
+      expect(rows).to.have.length(1);
+    });
+
+    it('a READER (not the owner) can linkFor a docId in a bucket it reads — the whole point', async () => {
+      mockTransport();
+      // APP_A registers (writes) the invoice; APP_B (notifier) is only a reader of billing.
+      const { data: reg } = await callAs(link, APP_A, 'register', { bucket: 'billing', nodeId: 8803 });
+      const { data } = await callAs(link, APP_B, 'linkFor', { docId: reg.docId });
+      expect(data.deliveryUrl).to.match(/\/invoice\//); // APP_B delivered a doc it did not upload
+      // and the link actually resolves to bytes
+      const res = await GET(`/invoice/${tokenOf(data.deliveryUrl)}`, { responseType: 'arraybuffer' });
+      expect(res.status).to.equal(200);
+    });
+
+    it('a reader CANNOT register/claim — write authority is writers-only', async () => {
+      mockTransport();
+      const err = await callAs(link, APP_B, 'register', { bucket: 'billing', nodeId: 8804 }).catch((e) => e);
+      expect(err.response.status).to.equal(404); // APP_B reads billing but may not write it
+    });
+
+    it('a reader CANNOT linkForNode either (it is the write-side convenience)', async () => {
+      mockTransport();
+      const err = await callAs(link, APP_B, 'linkForNode', { bucket: 'billing', nodeId: 8805 }).catch((e) => e);
+      expect(err.response.status).to.equal(404);
+    });
+
+    it('an outsider with no grant gets 404 on linkFor — reader ∪ writer only', async () => {
+      mockTransport();
+      const { data: reg } = await callAs(link, APP_A, 'register', { bucket: 'billing', nodeId: 8806 });
+      const err = await callAs(link, APP_C, 'linkFor', { docId: reg.docId }).catch((e) => e);
+      expect(err.response.status).to.equal(404);
+    });
+
+    it('a writer still reads its own bucket (writer implies read)', async () => {
+      mockTransport();
+      const { data: reg } = await callAs(link, APP_A, 'register', { bucket: 'billing', nodeId: 8807 });
+      const { data } = await callAs(link, APP_A, 'linkFor', { docId: reg.docId });
+      expect(data.deliveryUrl).to.match(/\/invoice\//);
+    });
+
+    it('register 404s a node not in the bucket folder (folder guard)', async () => {
+      mockTransport();
+      linkService.deps.nodeInFolder = vi.fn(async () => false);
+      const err = await callAs(link, APP_A, 'register', { bucket: 'billing', nodeId: 8808 }).catch((e) => e);
+      expect(err.response.status).to.equal(404);
+    });
+
+    it('register 403s a caller whose token carries no azp claim', async () => {
+      cds.context = { user: new cds.User({ id: 'no-azp' }) }; // no authInfo.token.azp
+      const err = await link.send({ event: 'register', data: { bucket: 'billing', nodeId: 8809 } }).catch((e) => e);
+      expect(Number(err.code)).to.equal(403);
     });
   });
 
