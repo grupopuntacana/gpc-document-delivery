@@ -14,6 +14,7 @@ legible.
 | **Constraint** | [`constraints.md`](constraints.md) | "What platform fact bound the decision?" | durable — never superseded |
 | **Design** | [`design/`](design/) | "What's the solution, why, and what's still open?" | living |
 | **Runbook** | [`setup/`](setup/) | "How do I provision/operate this?" | living |
+| **Consumer guide** | [`CONSUMING.md`](CONSUMING.md) | "How does my app use this service?" | living |
 | **Reference** | [`endpoint-discovery.md`](endpoint-discovery.md) | "What did we learn probing it?" | living |
 | **Work** | [`tasks/`](tasks/) | "What is in flight right now?" | todo → done |
 
@@ -43,6 +44,9 @@ legible.
   mermaid flows).
 - **[endpoint-discovery.md](endpoint-discovery.md)** — OpenText REST endpoints probed during
   the spike, and the OTDS-federation finding.
+- **[CONSUMING.md](CONSUMING.md)** — how a CAP app that stores files with
+  `@gpc/attachments-opentext` claims them (`register`) and mints delivery links (`linkFor`):
+  IAS identity, destination, bucket request, proxy model, troubleshooting.
 - **[setup/](setup/)** — AWS provisioning runbook (S3 bucket, CloudFront key pair, distribution).
 - **[tasks/](tasks/)** — lightweight work tracker.
 

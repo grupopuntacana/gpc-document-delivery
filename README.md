@@ -341,6 +341,10 @@ raw `nodeId` is never accepted or returned.
 `ttlDays` is optional; omitted, the token defaults to `LINKFOR_TOKEN_TTL_HOURS` (24h), never the
 30-day `makeToken` default — the delivery credential is short-lived (re-mint on demand).
 
+**Adopting this from another app?** Follow [docs/CONSUMING.md](docs/CONSUMING.md): IAS identity,
+the `DOCUMENT_SERVICE` destination, requesting a bucket, the proxy model, and calling
+`register` / `linkFor`.
+
 ## Portal UI (`app/frontend`)
 
 A Vite + Vue 3 SPA, scaffolded with `cds add vue --into portal` then renamed to
