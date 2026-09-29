@@ -2,6 +2,12 @@
 
 Three views for explaining the prototype to the team, interview-style.
 
+> **Visual companion:** [`document-delivery-landscape.excalidraw`](document-delivery-landscape.excalidraw)
+> — the solution landscape by network zone (Internet · BTP · AWS · GPC on-premise · S/4HANA Private
+> Cloud): consumer apps + `@gpc/attachments-opentext`, `register`/`linkFor`, the Cloud Connector
+> tunnel to OpenText, the CloudFront/S3 cache, and the *why* behind each piece. Editable in
+> Excalidraw or the VS Code Excalidraw extension.
+
 > **Tip:** copy any of the ```mermaid blocks below into [excalidraw.com](https://excalidraw.com) via **Menu → Generate → Mermaid to Excalidraw** to get the whiteboard look.
 
 ---

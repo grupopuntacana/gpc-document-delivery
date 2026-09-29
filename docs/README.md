@@ -41,7 +41,8 @@ legible.
 - **[design/](design/)** — [solution-overview.md](design/solution-overview.md) (the case:
   numbers, cost, rejected alternatives, use cases, and the open design decisions we own) and
   [architecture-diagrams.md](design/architecture-diagrams.md) (component + cache-hit/miss
-  mermaid flows).
+  mermaid flows) + [`document-delivery-landscape.excalidraw`](design/document-delivery-landscape.excalidraw)
+  (the solution landscape by network zone).
 - **[endpoint-discovery.md](endpoint-discovery.md)** — OpenText REST endpoints probed during
   the spike, and the OTDS-federation finding.
 - **[CONSUMING.md](CONSUMING.md)** — how a CAP app that stores files with
