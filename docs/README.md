@@ -33,7 +33,8 @@ legible.
 ## Map
 
 - **[adr/](adr/)** — active decision log: [0001 sharing pattern](adr/0001-document-sharing-pattern.md),
-  [0005 CAP delivery+ingest service](adr/0005-shared-delivery-ingest-service.md). (The
+  [0005 CAP delivery+ingest service](adr/0005-shared-delivery-ingest-service.md), …,
+  [0009 S/4 ArchiveLink delivery](adr/0009-archivelink-source-typed-documents.md). (The
   retired 0002–0004 → RFC 0001; see the [ADR index](adr/README.md#the-gap-at-00020004).)
 - **[rfc/](rfc/)** — [0001 anonymous public endpoint](rfc/0001-public-anonymous-endpoint.md) *(discarded)*.
 - **[constraints.md](constraints.md)** — IS Starter licensing, OTDS auth gotcha, no-HANA-BLOBs,

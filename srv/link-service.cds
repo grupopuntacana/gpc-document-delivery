@@ -24,6 +24,16 @@
  *     nodeId)               that both uploads and delivers its own node. Same folder-guarded
  *                           writer authorization as `register`.
  *
+ *   linkForArchive(       — S/4-NATIVE path (ADR 0009). S/4 holds the ArchiveLink (TOA01 ARCHIV_ID +
+ *     contRep,              ARC_DOC_ID) of a document it archived and asks for a public link.
+ *     archDocId, …)         Authorized by the caller's azp against the content repository's
+ *                           `allowedReaders` (ARCHIVELINK_REPOSITORIES); lazily upserts a
+ *                           source='archivelink' row and returns its `docId` plus a `/doc/{token}`
+ *                           link. The ArchiveLink id is a locator, never the credential.
+ *
+ * `linkFor(docId)` serves both row sources: OpenText rows keep the v1 `/invoice/{token}` link
+ * (byte-compatible with the Python / Integration Suite side); ArchiveLink rows get `/doc/{token}`.
+ *
  * All `@requires: 'authenticated-user'` (service-to-service IAS auth). The anonymous leg is the
  * separate /invoice/{token} route (srv/server.js), unchanged. No entity is exposed here — the
  * store stays un-queryable (DoD-5).
@@ -60,6 +70,20 @@ service LinkService {
     ttlDays : Integer
   ) returns {
     deliveryUrl : String;
+    expiresAt   : Timestamp;
+  };
+
+  @requires: 'authenticated-user'
+  action linkForArchive(
+    contRep   : String(2),   // TOA01 ARCHIV_ID — the content repository, e.g. 'C1'; the read scope
+    archDocId : String(40),  // TOA01 ARC_DOC_ID — the archived document (one per reprint)
+    sapObject : String(10),  // optional, audit only: TOA01 SAP_OBJECT, e.g. 'PRINTDOC'
+    objectId  : String(50),  // optional, audit + download name: TOA01 OBJECT_ID
+    docType   : String(10),  // optional, audit + download name: TOA01 AR_OBJECT, e.g. 'ISU_BILL'
+    ttlDays   : Integer
+  ) returns {
+    docId       : String;    // opaque claim-check; re-mint later with linkFor(docId)
+    deliveryUrl : String;    // /doc/{token}, short-lived
     expiresAt   : Timestamp;
   };
 }

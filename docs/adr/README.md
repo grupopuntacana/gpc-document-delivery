@@ -15,6 +15,7 @@ repo is self-contained, the prototype is archival.
 | [0006](0006-delivery-link-authorization.md) | Delivery-link authorization: opaque document reference + two-tier ownership | Proposed (amended by 0007, 0008) |
 | [0007](0007-plugin-ingest-app-private-noderef.md) | Attachments-plugin ingest: app-private `nodeId` + folder-guarded share-link | Proposed (amended by 0008) |
 | [0008](0008-bucket-scoped-cross-app-reads.md) | Bucket-scoped reader/writer grants for cross-app document delivery (S3-aligned) + `register` | Proposed |
+| [0009](0009-archivelink-source-typed-documents.md) | S/4 ArchiveLink delivery: source-typed documents + `linkForArchive` + `/doc/:token` | Proposed |
 
 ## The gap at 0002–0004
 

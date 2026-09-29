@@ -110,21 +110,32 @@ function clearKeyCache() {
 }
 
 /**
+ * Produce a short-lived CloudFront signed URL for any cached object key.
+ * @param {string} key    S3 object key (no leading slash)
+ * @param {number} [ttl]  override TTL in seconds (defaults to SIGNED_URL_TTL_SECONDS)
+ * @returns {Promise<string>}
+ */
+async function signedUrlForKey(key, ttl) {
+  const url = `https://${cloudfrontDomain()}/${key}`;
+  const expiresEpoch = Math.floor(Date.now() / 1000) + (ttl != null ? ttl : ttlSeconds());
+  const pem = await getSigningKey();
+  return signCloudFrontUrl(url, pem, keyPairId(), expiresEpoch);
+}
+
+/**
  * Produce a short-lived CloudFront signed URL for an OpenText node's cached PDF.
  * @param {number} nodeId
  * @param {number} [ttl]  override TTL in seconds (defaults to SIGNED_URL_TTL_SECONDS)
  * @returns {Promise<string>}
  */
 async function signedUrlForNode(nodeId, ttl) {
-  const url = `https://${cloudfrontDomain()}/${s3Key(nodeId)}`;
-  const expiresEpoch = Math.floor(Date.now() / 1000) + (ttl != null ? ttl : ttlSeconds());
-  const pem = await getSigningKey();
-  return signCloudFrontUrl(url, pem, keyPairId(), expiresEpoch);
+  return signedUrlForKey(s3Key(nodeId), ttl);
 }
 
 module.exports = {
   s3Key,
   signedUrlForNode,
+  signedUrlForKey,
   // exported for unit tests / Layer 2
   awsBase64,
   cannedPolicy,

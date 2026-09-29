@@ -305,3 +305,46 @@ generic message: a response can include node IDs.
 | Grant worked, then stopped after a redeploy of document-delivery | The bucket was set with `cf set-env`, not in `secrets.mtaext` (step 4). |
 | *"no auth tokens could be fetched"* in hybrid | A local `destinations` variable defines `DOCUMENT_SERVICE` (step 7). Remove it. |
 | `500 bucket registry is misconfigured` | `OPENTEXT_BUCKETS` in document-delivery is malformed. Maintainers' side. |
+
+## S/4 ArchiveLink documents
+
+This section is for **S/4**, not a CAP app. Documents S/4 archives through ArchiveLink (for
+example IS-U bills: `PRINTDOC` / `ISU_BILL` in content repository `C1`) can get a public link
+without being uploaded to BTP. S/4 already holds the locator in its link table (TOA01
+`ARCHIV_ID` + `ARC_DOC_ID`) and passes it to `linkForArchive`. See
+[ADR 0009](adr/0009-archivelink-source-typed-documents.md).
+
+```
+POST /odata/v4/link/linkForArchive
+Authorization: Bearer <IAS client-credentials token of the S/4 client>
+{ "contRep": "C1", "archDocId": "0AFFC37AE2C51FD1AE84A8F99394C9FC",
+  "sapObject": "PRINTDOC", "objectId": "050000000006", "docType": "ISU_BILL", "ttlDays": 7 }
+
+→ { "docId": "…", "deliveryUrl": "https://<srv>/doc/<token>", "expiresAt": "…" }
+```
+
+- **Send the exact `ARC_DOC_ID`, not the business key.** A reprint creates a new archived
+  document for the same `OBJECT_ID`; each `ARC_DOC_ID` gets its own row and link.
+- `sapObject` / `objectId` / `docType` are optional. They go into the audit row and the download
+  name (`ISU_BILL-050000000006.pdf`), and they grant nothing.
+- Calling again for the same document returns the same `docId` and a fresh link.
+  `linkFor(docId)` works too.
+- The link is a `/doc/<token>` URL. It stops working immediately if the document is revoked.
+
+**Setup:**
+
+1. **S/4 → BTP auth.** Create an IAS application for S/4 with a dependency on document-delivery
+   (like [step 1](#1-your-apps-ias-application)). In S/4, configure an OAuth 2.0 client (OA2C)
+   and an SM59 HTTP destination to the document-delivery srv host that uses it.
+2. **Grant.** Maintainers add S/4's `azp` to the repository in `ARCHIVELINK_REPOSITORIES` in
+   `secrets.mtaext`, e.g. `{"C1":{"allowedReaders":["<s4-azp>"]}}`.
+3. **Fetch path.** Maintainers create the BTP destination `OpenText_ArchiveCenter` (OnPremise,
+   through the Cloud Connector) pointing at the archive server that serves `C1` (the host in S/4
+   transaction OAC0). document-delivery calls `…/archive?get&contRep=C1&docId=…&compId=data` on it.
+
+| Symptom | Cause and fix |
+|---|---|
+| `400` from `linkForArchive` | `contRep` isn't 2 chars `[A-Z0-9]`, `archDocId` isn't 1–40 chars `[A-Za-z0-9]`, or a metadata field is longer than its TOA01 width. |
+| `404 not found` from `linkForArchive` | S/4's `azp` isn't in the repository's `allowedReaders`, the repository isn't configured, or the document was revoked. |
+| `/doc/<token>` returns `502` | The archive server couldn't be reached or refused the request. A `401`/`403` in the log usually means repository `C1` requires signed URLs (not supported yet); a `404` means the `ARC_DOC_ID` doesn't exist there. |
+| `500 archive registry is misconfigured` | `ARCHIVELINK_REPOSITORIES` in document-delivery is malformed. Maintainers' side. |
