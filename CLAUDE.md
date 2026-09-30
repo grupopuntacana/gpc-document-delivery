@@ -4,93 +4,129 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-SAP CAP (Node.js) app on BTP that ports a Python prototype's document-delivery flow:
-verify an HMAC sharing token → fetch a PDF from OpenText (OTDS/OTCS over the BTP Destination
-Service) → serve it. **Option A** (`stream`, default) returns the PDF bytes directly;
-**Option B** (`cdn`) returns a 302 to a short-lived CloudFront signed URL backed by an S3
-write-through cache. Toggle with `OPENTEXT_DELIVERY_MODE=stream|cdn` — no code change.
+SAP CAP (Node.js) service on BTP that stores documents in OpenText and hands out short-lived
+delivery links to them. Other systems (CAP apps on BTP, S/4) are its consumers. Three jobs:
 
-`README.md` is the source of truth for BTP setup, Credential Store provisioning, and the
-debugging/timing playbook. Read it before any deploy or BTP-services task. **`docs/` is the
-self-contained knowledge base** — decisions in [`docs/adr/`](docs/adr/), discarded
-explorations in [`docs/rfc/`](docs/rfc/), durable platform facts in
-[`docs/constraints.md`](docs/constraints.md); start at [`docs/README.md`](docs/README.md) for
-the taxonomy. Prefer these over browsing the prototype repo — the architecture/decision
-knowledge is consolidated here.
+- **Deliver** — anonymous `GET /invoice/:token` and `GET /doc/:token` verify a sharing token,
+  then serve the file. `OPENTEXT_DELIVERY_MODE=stream` (code default) returns the bytes;
+  `cdn` (what `mta.yaml` deploys) returns a 302 to a short-lived CloudFront signed URL backed
+  by an S3 write-through cache.
+- **Ingest** — `IngestService.uploadDocument` uploads into a per-app *bucket*.
+- **Link** — `LinkService` turns a document reference into a fresh delivery link.
 
-The original is the sibling Python prototype `../python/opentext-cdn-prototype` (validated
-the architecture and produced the latency numbers, now cited in `docs/`). It remains the
-**canonical implementation** reference — `src/token_redirect.py`, `src/cdn_publisher.py`, and
-`src/opentext_client.py` are what this repo ports; consult them when changing `token.js`,
-`cloudfront.js`, `cdn.js`, or `opentext.js`. It also still holds the **secret material**
-(`.env`, `secrets/cloudfront_private_key.pem` — referenced by path, never copied here) and a
-**parallel SAP Integration Suite port** (`docs/sap-handoff/integration-suite/`) that must stay
-token-compatible via the same `SHARED_LINK_SECRET`. Treat the prototype as read-only history.
+Where knowledge lives — read the relevant one before acting, don't re-derive it:
+
+| Need | Read |
+|---|---|
+| BTP setup, Credential Store, hybrid runs, env vars, log/timing playbook | `README.md` |
+| Why something is the way it is | `docs/adr/` (decisions), `docs/rfc/` (discarded explorations) |
+| Platform facts that must not be "simplified" away | `docs/constraints.md` |
+| How a consumer calls this service | `docs/CONSUMING.md` |
+| AWS / ArchiveLink provisioning | `docs/setup/` |
+| What is in flight | `docs/tasks/` |
+
+`docs/README.md` explains the taxonomy; put new docs in the matching folder.
 
 ## Commands
 
 ```bash
 npm install
 npm test                 # vitest run — all logic tests, no BTP services needed
-npm run test:watch       # vitest watch
+npm run test:watch
 npx vitest run test/token.test.js          # single file
 npx vitest run -t "name of test"           # single test by name
+npm run lint             # eslint (Airbnb + CAP), --max-warnings 0; backend only
+npm --prefix app/frontend run lint         # the SPA has its own eslint config
 
-npx cds serve            # boot CAP on :4004 (needs SHARED_LINK_SECRET in env for checkSecret)
-npm run watch            # cds watch
-npm run watch:hybrid     # cds watch --profile hybrid (local code, live BTP services via `cds bind`)
+npm run watch            # cds watch on :4004 (needs SHARED_LINK_SECRET in env)
+npm run watch:hybrid     # local code + live BTP services (after `cds bind`, see README)
 
-# Portal SPA (Vite proxies /odata -> :4004)
-npm --prefix app/frontend run dev            # SPA on :5173
+npm --prefix app/frontend run dev          # SPA on :5173, proxies /odata -> :4004
 
-mbt build && cf deploy mta_archives/document-delivery_1.0.0.mtar   # deploy
+mbt build && cf deploy mta_archives/document-delivery_1.0.0.mtar -e secrets.mtaext
 ```
 
-Tests are **vitest**, not the CAP/Jest default. There is no separate vitest config file.
+- Tests are **vitest**, not the CAP/Jest default; there is no vitest config file.
+- CI (`.github/workflows/test.yaml`) runs ESLint + vitest. Deploys never run on a plain push:
+  only a `v*` tag (`release.yaml`, gated on CI having already passed on that commit) or a
+  manual dispatch of `cf.yaml`.
+- Listing or uploading real documents needs live OpenText, so use `watch:hybrid`. Mock users
+  there: `admin`/`admin` and `alice` (empty password), each carrying an `azp` (`.cdsrc.json`).
 
 ## Architecture
 
-Request paths:
-- **`PortalService.documents()`** (`srv/portal-service.{cds,js}`) — authenticated. Lists a
-  folder from OpenText, keeps documents (type 144), and mints a short-lived sharing token
-  per node. Returns rows the Vue SPA renders.
-- **`GET /invoice/:token`** (`srv/server.js`) — anonymous; the token *is* the credential, so
-  it sits outside CAP's `@requires` services and is registered on `cds.on('bootstrap')`.
-  Verifies the token, then streams the PDF (Option A) or 302-redirects to CloudFront (Option B).
-- **`LinkService.linkForArchive`** + **`GET /doc/:token`** (ADR 0009) — S/4-native delivery:
-  S/4 passes its ArchiveLink locator `(contRep, archDocId)`, gets a `/doc` link backed by a
-  source-typed `Documents` row. `/doc` uses the v2 token (`srv/lib/doctoken.js`, key-separated,
-  DB-resolved); `/invoice` and its v1 token are unchanged. `srv/lib/delivery.js` dispatches by
-  row `source` (`otcs` | `archivelink`); `archives.js` holds the repository grants.
-- **`SelfTestService`** (`srv/delivery-service.{cds,js}`) — `checkSecret` / `pingOpenText`
-  diagnostic actions that return status only, never secret material.
+**Services** (`srv/*.cds` + `.js`, all `@requires: 'authenticated-user'`, IAS in production):
+- `IngestService` (`/odata/v4/ingest`) — `uploadDocument` → `{ docId, name, token }`.
+- `LinkService` (`/odata/v4/link`) — `register`, `linkFor`, `linkForNode`, `linkForArchive`.
+  Exposes no entity on purpose.
+- `PortalService` (`/odata/v4/portal`) — backs the demo SPA in `app/frontend` (Vue 3 + Vite).
+- `SelfTestService` (`/odata/v4/selftest`, files named `delivery-service.*`) — `checkSecret`,
+  `pingOpenText`, `version`; status only, never secret material.
 
-`srv/lib/` (the load-bearing ports — keep byte-compatible with the Python side):
-- `token.js` — HMAC verify/mint, byte-for-byte port of Python `token_redirect.py`. A token
-  minted by either side must validate on the other (cross-interop test enforces this).
-- `cloudfront.js` — canned-policy signing: RSA PKCS#1 v1.5 + **SHA-1**, AWS base64 alphabet
-  (`+→-`, `/→~`, `=→_`).
-- `credstore.js` — reads secrets from SAP Credential Store (JWE-decrypted REST), **falling
-  back to `process.env`** when no credstore is bound — so local/test runs need no BTP.
-- `opentext.js` — OTDS ticket bootstrap + OTCS calls over the Destination Service; caches
-  the ticket, retries once on 401. **Auth gotcha (CE 25.4 + OTDS federation):** `OTDSTicket`
-  must ride on *every* OTCS call as the session header; the `OTCSTicket` returned in
-  response headers is **not** a valid standalone credential (yields 401) and is captured for
-  diagnostics only. There is no OTDS→OTCS exchange endpoint.
-- `cdn.js` — Option B S3 cache + CloudFront URL assembly.
+**Anonymous routes** (`srv/server.js`, registered on `cds.on('bootstrap')`, outside CAP auth
+because the token is the credential):
+- `/invoice/:token` — v1 token (`lib/token.js`): stateless HMAC over an OpenText `nodeId`.
+- `/doc/:token` — v2 token (`lib/doctoken.js`): HMAC over a `docId`, resolved against the
+  `Documents` row on every request, so revoking the row kills outstanding links at once.
 
-## Conventions that aren't obvious
+**The `Documents` table** (`db/schema.cds`; SQLite locally and in tests, HANA on BTP) maps an
+opaque `docId` to where the bytes live. Rows are source-typed: `otcs` (OpenText `nodeId` +
+`bucket`) or `archivelink` (S/4 `contRep` + `archDocId`). It is never projected onto a service.
 
-- **`SHARED_LINK_SECRET` must be byte-identical to the Python side** or every existing
-  sharing token breaks. Same applies to any change in `token.js` or `cloudfront.js` — they
-  are interop contracts, not free to refactor.
-- Secrets resolve through `credstore.js`'s env fallback, so you rarely need real BTP creds
-  to develop. Required env for a useful local boot: `SHARED_LINK_SECRET` (64 chars).
-- OpenText endpoint paths live as **constants in `opentext.js`**, never in env. Destination
-  names and tunables are env-overridable (`OPENTEXT_*`, `OTDS_*`, `OTCS_*`, `CREDSTORE_*`).
-- Per-phase timing logs are at `debug` level, off by default. Enable with
-  `CDS_LOG_LEVELS='{"portal":"debug","opentext":"debug"}'` (see README "Debugging with logs").
-- `mta.yaml` provisions service instances; their *contents* (destinations, Credential Store
-  entries) are configured separately. During validation the env fallback in `credstore.js`
-  supplies secrets; `credstore.js` auto-detects the Credential Store binding, so switching to
-  it needs no code change (task `0001`). Write entries via `scripts/credstore-put.js`.
+**Authorization** is by the caller's `azp`, derived from its IAS token, never taken from the
+request body:
+- `lib/buckets.js` — `OPENTEXT_BUCKETS` registry: bucket → OpenText folder, plus
+  `allowedWriters` / `allowedReaders`. Writer implies read; no wildcard, nothing open by default.
+- `lib/archives.js` — `ARCHIVELINK_REPOSITORIES`: which `azp` may mint links per content
+  repository.
+
+**`srv/lib/` modules worth knowing before editing:**
+- `delivery.js` — the per-source dispatch table (`SOURCES`). Handlers and routes go through
+  it; adding a source is one entry there, never a `row.source === …` branch in a handler.
+- `opentext.js` — OTDS ticket + OTCS calls over the Destination Service; caches the ticket,
+  retries once on 401. **Auth gotcha:** `OTDSTicket` must ride on *every* OTCS call; the
+  `OTCSTicket` in response headers is not a usable credential (401). See constraints C2.
+- `archivelink.js` / `seckey.js` — reads from the archive server over the SAP Content Server
+  HTTP protocol, each request signed.
+- `cdn.js` / `cloudfront.js` — S3 cache and CloudFront canned-policy signing (RSA PKCS#1 v1.5
+  + **SHA-1**, AWS base64 alphabet `+→-`, `/→~`, `=→_`).
+- `credstore.js` — reads secrets from the SAP Credential Store binding; **falls back to
+  `process.env` when none is bound**, so local and test runs need no BTP.
+
+## Rules that aren't obvious
+
+- **`token.js` and `cloudfront.js` are interop contracts, not free to refactor.** The v1 token
+  must stay byte-compatible with the Python prototype and the SAP Integration Suite port
+  (`test/token.test.js` pins the Python-compatible encoding; constraints C5), and `SHARED_LINK_SECRET` must be
+  byte-identical on all sides or every issued link breaks. Need a new token shape? Extend v2
+  in `doctoken.js`, which uses a separately derived key.
+- **A raw `nodeId` never appears in a request or response** of `IngestService` / `LinkService`
+  (the one exception is the write-side claim `register` / `linkForNode`, which is
+  folder-guarded). Consumers hold the opaque `docId`.
+- **Denials stay opaque to the caller, specific in the log.** Unknown bucket and forbidden
+  bucket both return 403 with the same body; a missing or revoked document returns the same
+  404; upstream errors return a generic 502. Don't make error bodies more helpful.
+- OpenText endpoint paths are **constants in `opentext.js`**, never env. Destination names and
+  tunables are env-overridable (`OPENTEXT_*`, `OTDS_*`, `OTCS_*`, `CREDSTORE_*`, `ARCHIVELINK_*`).
+- **Config that must survive a redeploy goes in `mta.yaml` or `secrets.mtaext`**, not
+  `cf set-env`. Real ACL values (`OPENTEXT_BUCKETS`, `ARCHIVELINK_REPOSITORIES`) live in the
+  gitignored `secrets.mtaext`; `mta.yaml` holds placeholders. `.env`, `secrets.mtaext`,
+  `certs/` and `.cdsrc-private.json` hold live material — don't print or commit them.
+- **Module systems are mixed:** `srv/` and `scripts/` are CommonJS with `'use strict'`;
+  `test/` is ESM and pulls backend modules in via `createRequire`. The SPA is ESM with its own
+  `package.json`.
+- **Tests mock at the `deps` seam** (e.g. `opentext.deps`, `linkService.deps`) and set env
+  (`SHARED_LINK_SECRET`, `OPENTEXT_BUCKETS`) at the top of the file before requiring modules.
+  Follow that pattern rather than mocking HTTP.
+- Per-phase timing logs are `debug` level, off by default:
+  `CDS_LOG_LEVELS='{"portal":"debug","opentext":"debug"}'`.
+- Code comments and docs cite ADRs and tasks by number (`ADR 0009`, `task 0007`); keep doing
+  so, and update the ADR/task when behaviour it describes changes.
+
+## The Python prototype
+
+`../python/opentext-cdn-prototype` is where the architecture was validated. It is read-only
+history, and `docs/` is self-contained, so you rarely need it. Two reasons to open it: it is
+the reference implementation when touching `token.js`, `cloudfront.js`, `cdn.js` or
+`opentext.js` (`src/token_redirect.py`, `src/cdn_publisher.py`, `src/opentext_client.py`), and
+it holds the secret material local runs reference by path (never copy it here).

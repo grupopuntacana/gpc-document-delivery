@@ -1,26 +1,26 @@
 # GPC Document Delivery (SAP CAP on BTP)
 
-Node.js CAP application that replaces the SAP Integration Suite iFlow track for serving
-OpenText PDFs through CloudFront. End goal (across milestones): verify an HMAC sharing
-token → fetch the PDF from OpenText (S3-cached) → 302-redirect to a short-lived CloudFront
-signed URL — i.e. the CAP port of the Python prototype's `token_redirect.py` +
-`cdn_publisher.py` + `opentext_client.py`.
+Node.js CAP application on BTP that stores documents in OpenText and hands out short-lived
+delivery links to them. It does three things:
 
-Patterns follow the sibling projects `../bookshop` (deployed) and `../vestibule` (POC):
-Node CAP, IAS auth, MTA deploy.
+- **Deliver** — an anonymous `GET /invoice/:token` (or `/doc/:token`) verifies a sharing
+  token, then either streams the file from the system of record (`stream`) or 302-redirects
+  to a short-lived CloudFront signed URL backed by an S3 write-through cache (`cdn`). Toggle
+  with `OPENTEXT_DELIVERY_MODE=stream|cdn`; the deployed app runs `cdn`.
+- **Ingest** — `IngestService.uploadDocument` uploads into a per-app *bucket* (an OpenText
+  folder with writer/reader ACLs).
+- **Link** — `LinkService` turns a document reference into a fresh delivery link, for CAP apps
+  (`register` / `linkFor`) and for S/4 ArchiveLink documents (`linkForArchive`).
 
-## Milestone 1 — Credential Store + Destination spike (this commit)
+Decisions, constraints and runbooks live in [`docs/`](docs/README.md); other systems adopting
+the service start at [docs/CONSUMING.md](docs/CONSUMING.md).
 
-Proves the two BTP plumbing pieces the rest of the port depends on, before porting any
-crypto:
+## Diagnostics (`SelfTestService`)
 
-1. **Secret management** via **SAP Credential Store** — `SHARED_LINK_SECRET` and the
-   CloudFront private key are read at runtime from a bound service, not from `.env`.
-2. **Connectivity** via the **BTP Destination Service** — OpenText (OTDS/OTCS) is reached
-   through destinations; the OTDS-ticket auth dance runs in CAP code.
-
-A `SelfTestService` (`srv/delivery-service.cds`) exposes diagnostic actions that
-return status only, never secret material:
+`SelfTestService` (`srv/delivery-service.{cds,js}`) checks the two BTP plumbing pieces
+everything else depends on: secrets from the **SAP Credential Store** and OpenText
+connectivity through the **BTP Destination Service**. Its actions return status only, never
+secret material:
 
 | Action | Proves | Returns |
 |---|---|---|
@@ -28,21 +28,27 @@ return status only, never secret material:
 | `POST /odata/v4/selftest/pingOpenText` | Destination + OTDS auth | `{ ok, status, nodeTitle, ms }` |
 | `POST /odata/v4/selftest/version` | Deployed build version | `{ version }` |
 
-### Code map
-- `srv/lib/credstore.js` — Credential Store REST reader (Basic auth + namespace header,
-  JWE response decrypt with the binding's client key). Falls back to `process.env`
-  (`SHARED_LINK_SECRET`, `CLOUDFRONT_PRIVATE_KEY[_PATH]`) when unbound, so local/test runs
-  need no BTP services.
-- `srv/lib/opentext.js` — OTDS ticket bootstrap + OTCS node fetch over the Destination
-  Service. `OTDSTicket` on every OTCS call; single retry on 401, no backoff. Endpoint
-  paths are constants here, never in env.
-- `srv/delivery-service.js` — the two handlers.
+On a healthy deployment `checkSecret` returns `source:"credstore"` with `secretLen:64`, and
+`pingOpenText` returns `ok:true` with node 2000's title.
+
+### Code map (`srv/lib/`)
+- `credstore.js` — Credential Store REST reader (Basic auth + namespace header, JWE response
+  decrypt with the binding's client key). Falls back to `process.env` when unbound, so
+  local/test runs need no BTP services.
+- `opentext.js` — OTDS ticket bootstrap + OTCS calls (list, fetch, upload) over the
+  Destination Service. `OTDSTicket` on every OTCS call; single retry on 401, no backoff.
+  Endpoint paths are constants here, never in env.
+- `token.js` / `doctoken.js` — the `/invoice` (v1) and `/doc` (v2) sharing tokens.
+- `cloudfront.js` / `cdn.js` — CloudFront canned-policy signing and the S3 cache.
+- `buckets.js` / `archives.js` — the bucket registry and the ArchiveLink repository grants.
+- `delivery.js` — dispatches a document by source (`otcs` | `archivelink`);
+  `archivelink.js` / `seckey.js` read from the archive server with signed requests.
 
 ## Local development
 
 ```bash
 npm install
-npm test                 # vitest — credstore fallback + OTDS retry/header logic (no BTP needed)
+npm test                 # vitest — all logic tests, no BTP services needed
 
 # Boot with the env-fallback secret (checkSecret works; pingOpenText needs bound destinations):
 SHARED_LINK_SECRET=<64-char-secret> npx cds serve
@@ -57,31 +63,33 @@ To upload through the portal locally you also need a caller `azp`, since ingest 
 ACL-checked (task 0007). One ships with the repo — see
 [Writing locally (the dev `azp`)](#writing-locally-the-dev-azp).
 
-## Secrets during validation (Credential Store deferred)
+## Secrets and per-deployment config
 
-The Credential Store is a **paid** service, so it's commented out in `mta.yaml` while we
-validate. The code needs no change: `credstore.js` falls back to env when no credstore is
-bound (and for Option A only `SHARED_LINK_SECRET` is needed — the CloudFront key isn't used
-until Option B). Supply the secret via a gitignored MTA extension descriptor:
+**Secrets** (`SHARED_LINK_SECRET`, the CloudFront private key, the AWS credentials, the
+ArchiveLink signing key) are read from the **SAP Credential Store**: `mta.yaml` binds the
+existing `credstore-shared` instance, and `credstore.js` auto-detects the binding. With no
+credstore bound — local and test runs — it falls back to env, so locally just
+`export SHARED_LINK_SECRET=<secret>`. Create the entries as described under
+[Credential Store](#credential-store).
+
+**Per-deployment config** that is not secret but must not live in the repo — the bucket ACLs
+(`OPENTEXT_BUCKETS`), the ArchiveLink grants (`ARCHIVELINK_REPOSITORIES`) and the signing
+certificate — goes in a gitignored MTA extension descriptor:
 
 ```bash
-cp secrets.mtaext.example secrets.mtaext       # fill in the 64-char secret
+cp secrets.mtaext.example secrets.mtaext       # fill in the real values
 mbt build
 cf deploy mta_archives/document-delivery_1.0.0.mtar -e secrets.mtaext
 ```
 
-Quick alternative (no extension file): `cf set-env document-delivery-srv SHARED_LINK_SECRET '<secret>' && cf restage document-delivery-srv`.
-Locally/hybrid: just `export SHARED_LINK_SECRET=<secret>`.
-
-**To switch to Credential Store later:** uncomment the `document-delivery-credstore` resource
-+ the srv `requires` line in `mta.yaml`, create the entries (below), redeploy, and delete
-`secrets.mtaext`. `credstore.js` auto-detects the binding — no code change.
+Set these there rather than with `cf set-env`: an imperative env var is reverted to the
+`mta.yaml` placeholder on every redeploy.
 
 ## BTP setup (one-time, after first deploy)
 
-The MTA (`mta.yaml`) provisions the service instances (ias, **destination**,
-application-logs; **credstore** when re-enabled). Their *contents* are configured in the
-cockpit / CF CLI:
+The MTA (`mta.yaml`) provisions the service instances (ias, **destination**, connectivity,
+application-logs, the HDI container) and binds the existing **credstore**. Their *contents*
+are configured in the cockpit / CF CLI:
 
 ### Destinations
 Create two destinations (OTDS is on port 8443, OTCS on 443):
@@ -158,10 +166,10 @@ Auth under hybrid is **mocked** (`.cdsrc.json` `[hybrid].auth`), so no IAS insta
 needed locally — call the authenticated services as a mock user, e.g. `curl -u alice: …`.
 Production is unaffected: it uses `[production].auth: ias` from `package.json`.
 
-## Document listing portal (Option A — direct stream)
+## Document listing portal
 
-CAP port of the Python `demo/server.py` portal: list documents live from OpenText and
-open them by clicking. Three pieces:
+The demo portal lists documents live from OpenText, opens them by clicking, and uploads new
+ones. Four pieces:
 
 - **`PortalService.documents()`** (`srv/portal-service.{cds,js}`) — **authenticated**
   function. Calls `opentext.listFolder(folderId)`, keeps documents (type 144), derives a
@@ -170,10 +178,11 @@ open them by clicking. Three pieces:
   Folder id from `OPENTEXT_FOLDER_ID` (default `2000`); token TTL from `PORTAL_TOKEN_TTL_DAYS`
   (default 7).
 - **`GET /invoice/:token`** (`srv/server.js`) — **anonymous** route (the token is the
-  credential). Verifies the token, downloads the PDF from OpenText over the Destination
-  Service, and streams the bytes back. *Option A:* serves the PDF directly. A later
-  milestone swaps the handler body for a 302 → CloudFront signed URL without changing the
-  URL contract.
+  credential). Verifies the token, then serves the document according to
+  `OPENTEXT_DELIVERY_MODE`: `stream` (the default) downloads it from OpenText over the
+  Destination Service and returns the bytes; `cdn` puts it in the S3 cache and answers with a
+  302 to a CloudFront signed URL (`SIGNED_URL_TTL_SECONDS`). The URL contract is the same in
+  both modes.
 - **`IngestService.uploadDocument`** (`srv/ingest-service.{cds,js}`) — **authenticated**
   action; the seed of the shared *ingest* group (ADR 0005). Takes `{ bucket, fileName,
   contentType, contentBase64 }`, uploads a multipart type-144 node to OpenText over the
@@ -325,7 +334,7 @@ cross-interop test (a token minted by either side validates on the other). Keep 
 sync if either changes.
 
 Listing real data requires a live OpenText destination, so run it **hybrid** (`cds bind`)
-or deployed — same as the Python demo needs live OpenText.
+or deployed.
 
 ## Delivery links (`LinkService`) — the read/claim surface
 
@@ -385,13 +394,11 @@ proxy model, `register` / `linkFor`) and S/4 (`linkForArchive`, with an ABAP ske
 
 ## Portal UI (`app/frontend`)
 
-A Vite + Vue 3 SPA, scaffolded with `cds add vue --into portal` then renamed to
-`app/frontend` (`cds add` reserves the `portal` path), served on BTP via the
-**SAP Application Frontend** (`app-front`) service — same delivery pattern as `../bookshop`.
+A Vite + Vue 3 SPA served on BTP via the **SAP Application Frontend** (`app-front`) service.
 
-- `app/frontend/public/xs-app.json` — routing: `/odata/**` → `srv-api` destination,
-  everything else → `app-front`. (`/rest/**` is open/anonymous, ready for the future
-  customer-facing token route.)
+- `app/frontend/public/xs-app.json` — routing: `/odata/**` → `srv-api` destination
+  (authenticated); `/invoice/**` and `/doc/**` → `srv-api` anonymously (the token is the
+  credential); everything else → `app-front`.
 - `app/frontend/public/manifest.json` — Application Frontend app descriptor.
 - `app/frontend/vite.config.js` — builds `dist/` and zips it to `dist/frontend.zip` (the
   artifact the MTA's `com.sap.application.content` deployer uploads).
@@ -432,10 +439,8 @@ deploy the tag name is passed as `APP_VERSION` into the SPA build and baked into
 (`APP_VERSION` env, else `package.json` — the env is not yet stamped into the deployed
 runtime, so it currently returns the `package.json` version).
 
-**Done when:** on the deployed app, `checkSecret` returns `source:"credstore"` with
-`secretLen:64`, and `pingOpenText` returns `ok:true` with node 2000's title — i.e. the
-secret comes from Credential Store and OpenText is reached through the Destination, with
-no secrets in env or code.
+After a deploy, run the [diagnostics](#diagnostics-selftestservice) to confirm the secret
+comes from the Credential Store and OpenText is reachable through the Destination.
 
 ## Debugging with logs
 
@@ -489,13 +494,4 @@ Locally, the same applies to `cds watch`: `CDS_LOG_LEVELS='{"portal":"debug","op
 - `OPENTEXT_KEEP_ALIVE` — `true` enables per-host keep-alive agents (default off; measured
   to give no win — the bottleneck is OpenText-side, not the TLS handshake).
 
-## Roadmap (later milestones)
-- `srv/lib/token.js` — port HMAC verify/parse from Python `token_redirect.py`
-  (`b64url_nopad(json_sorted).b64url_nopad(hmac_sha256)`).
-- `srv/lib/cloudfront.js` — port canned-policy signing (RSA PKCS#1 v1.5 + **SHA-1**, AWS
-  base64 alphabet `+→-,/→~,=→_`).
-- CloudFront signing (`srv/lib/cloudfront.js`, RSA PKCS#1 v1.5 + **SHA-1**) + S3 write-through
-  cache, then swap `/invoice/:token` from direct-stream (Option A) to a 302 redirect (Option B).
-  Needs AWS credentials on BTP (Credential Store / destination — TBD).
-- Optional portal extras from the demo: drag-drop upload + backend-trace panel.
-- Retire the FastAPI `proxy/` and the Integration Suite handoff once at parity.
+Open work is tracked in [docs/tasks/](docs/tasks/README.md).
