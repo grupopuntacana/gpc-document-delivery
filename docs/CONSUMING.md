@@ -69,6 +69,8 @@ claim nodes and mint links, `allowedReaders` may only mint links. The caller is 
 | 6 | [Call `register` and `linkFor`](#6-call-register-and-linkfor) | consuming app |
 | 7 | [Verify](#7-verify) | consuming app |
 
+Questions about the `docId` and links (reuse, lifetime, lists): see [Common questions](#common-questions).
+
 An app that only **reads** another app's documents does steps 1–5 and 7, asks to be added to
 that bucket's `allowedReaders` in step 4, and only ever calls `linkFor`.
 
@@ -302,6 +304,86 @@ generic message: a response can include node IDs.
   service, can't fetch an OAuth token from it, and fails with *"no auth tokens could be fetched"*.
 - **Deployed**: upload a file, check that the row has a `docId`, then open the `deliveryUrl`
   from `linkFor`.
+
+## Common questions
+
+### What does my app store, and what does a link look like over time?
+
+One photo, with the values from a real run on DEV:
+
+```
+upload         plugin stores the file         → row.url   = 22745                    (node ID, private)
+register       register("onboard-partner-docs", 22745)
+                                              → row.docId = "b5RVYZwqzXpA8BEhxQW23g"
+first link     linkFor("b5RVYZ…")             → …/invoice/eyJl…AAA   expires Tue
+a week later   linkFor("b5RVYZ…")             → …/invoice/eyJl…BBB   expires Wed
+another app    linkFor("b5RVYZ…")             → …/invoice/eyJl…CCC   expires Thu
+```
+
+| Who | Keeps | Never sees |
+|---|---|---|
+| OpenText | the bytes, as node `22745` | — |
+| Your app's database | `ID`, `url 22745`, `docId b5RVYZ…` | — |
+| Your app's API and the browser | `ID`, `docId`, a link at the moment it's shown | `22745` |
+| document-delivery | `b5RVYZ… → node 22745, bucket onboard-partner-docs` | — |
+| Another app (a reader of your bucket) | `docId b5RVYZ…` | `22745` |
+
+The **`docId`** is what you store and pass around. The node ID stays in your own row, where the
+plugin needs it to read the file, and goes nowhere else.
+
+### Can I use the same `docId` many times? For how long?
+
+Yes, for as long as you like. Every `linkFor(docId)` returns a **new** link. Each link expires after
+its TTL (24 hours by default); the `docId` does not expire. Store the `docId` once and ask for a link
+whenever one is needed. Don't store links.
+
+### When does a `docId` stop working?
+
+`linkFor` answers `404` when:
+
+- the document was **revoked** by document-delivery's maintainers; or
+- your app **lost its grant**: its `azp` is no longer in the bucket's `allowedWriters` or
+  `allowedReaders`.
+
+### Is a `docId` a link? Can someone use one they found?
+
+Neither. A `docId` can't be opened in a browser; only document-delivery turns it into a link. And an
+app that gets hold of a `docId` without a grant on that bucket receives `404`. That is why a `docId`
+is safe to store and to expose in your API, and the node ID is not.
+
+### Why can't I get a link straight from a node ID?
+
+Node IDs are sequential integers. A service that minted links for "node N" would let any caller walk
+every document in OpenText ([ADR 0006](adr/0006-delivery-link-authorization.md)). So a node ID is
+only accepted on the write side (`register` / `linkForNode`), from a writer of the bucket, and only
+for a node sitting directly in that bucket's folder. `linkForNode(bucket, nodeId)` is the one-call
+version, if you don't need to keep the `docId`.
+
+### Why is it two calls for my app and one for S/4?
+
+It's what each side keeps, not a technical limit. Your app swaps its private node ID for a `docId`
+**once**, at upload (`register`); from then on every link is **one** call (`linkFor`). S/4 keeps its
+ArchiveLink reference in its own link table, so it asks with that reference every time
+(`linkForArchive`, one call that claims and mints together). S/4 is trusted with a whole content
+repository; your app only with its own bucket, which is why your path keeps the folder check.
+
+### My screen lists many documents. Should I mint a link per row?
+
+No. Return the documents' metadata (name, type, `docId`) in the list, and mint one link when a user
+opens a document:
+
+| 20 items × 5 photos, user opens 2 | Link per row | Link on open |
+|---|---|---|
+| Calls to document-delivery per list view | 100 | 0 |
+| Calls for the 2 opened photos | 0 (already paid) | 2 |
+| Live links in responses, caches and logs | 100 | none |
+
+Minting is cheap for document-delivery (a database lookup and a signature, no OpenText call); the
+cost is the round trips your app makes on every list load. For viewing inside your own app, the
+plugin's authenticated `…/content` endpoint is enough; delivery links are for sharing outside it.
+Previews (thumbnails) in lists change the picture, since every image loads anyway: they should wait
+for upload-time thumbnails and a batch mint. The family guidance is in the `commons` hub,
+`docs/design/document-links-in-lists.md`.
 
 ## Troubleshooting
 
