@@ -89,7 +89,8 @@ the Python / Integration Suite interop see no difference.
 
 **5. Bytes are fetched with the SAP Content Server HTTP protocol** (`srv/lib/archivelink.js`):
 `GET {destination}/archive?get&pVersion=0045&contRep=…&docId=…&compId=data`, through a BTP
-destination (default `OpenText_ArchiveCenter`, Cloud Connector). This is the protocol S/4 itself
+destination (default `OpenText_OTAC`, Cloud Connector), signed with `secKey` when a signing
+certificate is configured. This is the protocol S/4 itself
 speaks to the repository, so it works against any ArchiveLink-certified server. In CDN mode the
 object is cached under `archivelink/<contRep>/<archDocId>`, which cannot collide with the v1
 `documents/<nodeId>.pdf` keys.
@@ -121,9 +122,12 @@ Customer
 **Negative**
 - **`/doc` costs one DB read per request** (primary-key lookup), which `/invoice` does not. This is
   negligible next to the upstream fetch or the CDN redirect.
-- **Signed Content Server URLs (`secKey`) are not implemented.** If the repository requires
-  signatures, fetches fail with a 502 carrying the upstream 401/403, and signing needs a BTP
-  certificate registered on the repository (follow-up).
+- **The repository requires signed URLs, so the service holds a signing key.** Discovery on
+  `C1` (Archive Center 25.4) showed unsigned reads answer `401 ICS:3003`. `srv/lib/seckey.js`
+  signs each fetch (`accessMode`/`authId`/`expiration`/`secKey`, PKCS#7 detached, RSA or DSA).
+  The private key lives in the Credential Store, and its certificate must be registered on the
+  repository, **read-only**, by the OpenText admin. That is one more secret to rotate and one
+  more cross-team step per landscape tier ([runbook](../setup/archivelink-otac.md)).
 - **Existence is not checked at mint time.** A wrong `archDocId` from an authorized caller mints a
   link that 502s on redeem. The caller is trusted (it holds the TOA01 row), and a Content Server
   `info` probe would add a round trip to every mint. Revisit if it causes problems in operation.
@@ -169,8 +173,10 @@ Customer
 
 ## Open items
 
-- OAC0 settings of `C1`: which server, and whether signatures are required (decides whether signing
-  is needed).
+- ~~OAC0 settings of `C1`~~ → answered: HTTP content server on a separate host (OTAC 25.4),
+  signed URLs mandatory, RSA accepted. See
+  [endpoint-discovery](../endpoint-discovery.md#archivelink-repository-c1-otac).
+- Certificate registration on `C1` and the Cloud Connector mapping (task 0010).
 - Why `OBJECT_ID 294` is not zero-padded like `050000000006` (matters only if we ever look up by
   business key).
 - S/4 PCE → BTP OAuth client-credentials setup (SM59 + OA2C), and S/4's `azp` for the grant.
@@ -180,5 +186,5 @@ Customer
 - Issue [#16](https://github.com/grupopuntacana/gpc-document-delivery/issues/16) ·
   task [0010](../tasks/0010-archivelink-delivery.md)
 - `srv/link-service.{cds,js}` (`linkForArchive`, source-aware `linkFor`) · `srv/server.js` (`/doc`)
-- `srv/lib/archives.js` · `srv/lib/archivelink.js` · `srv/lib/doctoken.js` · `srv/lib/delivery.js`
+- `srv/lib/archives.js` · `srv/lib/archivelink.js` · `srv/lib/seckey.js` · `srv/lib/doctoken.js` · `srv/lib/delivery.js`
 - `test/archivelink.test.js`

@@ -29,12 +29,14 @@ process.env.OPENTEXT_BUCKETS = JSON.stringify({
 
 const cds = require('@sap/cds');
 const { IdentityServiceToken } = require('@sap/xssec');
+const crypto = require('node:crypto');
 const archives = require('../srv/lib/archives.js');
 const archivelink = require('../srv/lib/archivelink.js');
 const buckets = require('../srv/lib/buckets.js');
 const cdn = require('../srv/lib/cdn.js');
 const delivery = require('../srv/lib/delivery.js');
 const doctoken = require('../srv/lib/doctoken.js');
+const seckey = require('../srv/lib/seckey.js');
 const tokenLib = require('../srv/lib/token.js');
 
 const { GET } = cds.test(process.cwd());
@@ -72,6 +74,16 @@ function mockArchive({ status = 200, contentType = 'application/pdf' } = {}) {
   });
 }
 
+// Minimal hand-built certificate skeleton for the secKey tests: just the TBSCertificate fields
+// the signer reads (serial, signature algorithm, issuer). Not a valid certificate.
+const derSeq = (body) => Buffer.concat([Buffer.from([0x30, body.length]), body]);
+const FAKE_SERIAL = Buffer.from('02030a0b0c', 'hex'); // INTEGER 0x0a0b0c
+const FAKE_SIGALG = Buffer.from('300d06092a864886f70d0101050500', 'hex'); // sha1WithRSA
+const FAKE_ISSUER = Buffer.from('300f310d300b06035504030c0454455354', 'hex'); // CN=TEST
+const FAKE_TBS_BODY = Buffer.concat([FAKE_SERIAL, FAKE_SIGALG, FAKE_ISSUER]);
+const FAKE_CERT_DER = derSeq(derSeq(FAKE_TBS_BODY));
+const FAKE_ISSUER_AND_SERIAL = Buffer.concat([FAKE_ISSUER, FAKE_SERIAL]);
+
 describe('archives registry (ARCHIVELINK_REPOSITORIES)', () => {
   beforeEach(() => archives.clearRegistryCache());
 
@@ -84,7 +96,7 @@ describe('archives registry (ARCHIVELINK_REPOSITORIES)', () => {
   });
 
   it('resolves destination and compId, with defaults', () => {
-    expect(archives.resolveRepository('C1')).toEqual({ destination: 'OpenText_ArchiveCenter', compId: 'data' });
+    expect(archives.resolveRepository('C1')).toEqual({ destination: 'OpenText_OTAC', compId: 'data' });
     expect(archives.resolveRepository('C2')).toEqual({ destination: 'Other_Archive', compId: 'data1' });
     expect(() => archives.resolveRepository('ZZ')).toThrow(expect.objectContaining({ code: 'UNKNOWN_REPOSITORY' }));
   });
@@ -131,15 +143,79 @@ describe('archivelink fetcher (SAP Content Server HTTP protocol)', () => {
   it('fetches through the repository destination without CSRF', async () => {
     mockArchive();
     const out = await archivelink.downloadDocument({
-      contRep: 'C1', archDocId: BILL_A, destination: 'OpenText_ArchiveCenter', compId: 'data',
+      contRep: 'C1', archDocId: BILL_A, destination: 'OpenText_OTAC', compId: 'data',
     });
     expect(out.contentType).toBe('application/pdf');
     expect(out.buffer.toString()).toContain('%PDF');
     const [dest, cfg, opts] = archivelink.deps.executeHttpRequest.mock.calls[0];
-    expect(dest).toEqual({ destinationName: 'OpenText_ArchiveCenter' });
+    expect(dest).toEqual({ destinationName: 'OpenText_OTAC' });
     expect(cfg.method).toBe('GET');
     expect(cfg.url).toContain(`docId=${BILL_A}`);
     expect(opts).toEqual({ fetchCsrfToken: false });
+  });
+});
+
+describe('secKey signing (signed Content Server URLs)', () => {
+  // A throwaway RSA key. Node cannot mint an X.509 certificate, so X509Certificate is stubbed to
+  // return the hand-built skeleton above; full PKCS#7 validity was checked once against
+  // `openssl smime -verify` (RSA/SHA-1, RSA/SHA-256, DSA/SHA-1) when the signer was written.
+  const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const keyPem = privateKey.export({ type: 'pkcs8', format: 'pem' });
+
+  /** The last OCTET STRING of the SignedData is the signature (no attributes, one signer). */
+  function signatureOf(p7, size) {
+    return p7.subarray(p7.length - size);
+  }
+
+  it('formats expiration as UTC yyyymmddhhmmss', () => {
+    expect(seckey.expirationStamp(new Date('2026-09-30T13:05:09Z'))).toBe('20260930130509');
+  });
+
+  it('signs contRep+docId+accessMode+authId+expiration, verifiable with the public key', () => {
+    const issuerAndSerial = vi.spyOn(crypto, 'X509Certificate')
+      .mockImplementation(function Fake() {
+        this.raw = FAKE_CERT_DER;
+      });
+    try {
+      const now = new Date('2026-09-30T13:00:00Z');
+      const out = seckey.readParams({ contRep: 'C1', docId: BILL_A }, {
+        keyPem, certPem: 'ignored', authId: 'CN=TEST_SIGNER', ttlSeconds: 300, now,
+      });
+      expect(out).toMatchObject({ accessMode: 'r', authId: 'CN=TEST_SIGNER', expiration: '20260930130500' });
+      const p7 = Buffer.from(out.secKey, 'base64');
+      expect(p7[0]).toBe(0x30); // DER SEQUENCE (ContentInfo)
+      // signedData OID 1.2.840.113549.1.7.2
+      expect(p7.includes(Buffer.from('06092a864886f70d010702', 'hex'))).toBe(true);
+      // the SignerInfo names the certificate by its exact issuer + serial bytes
+      expect(p7.includes(FAKE_ISSUER_AND_SERIAL)).toBe(true);
+      const message = Buffer.from(`C1${BILL_A}rCN=TEST_SIGNER20260930130500`);
+      expect(crypto.verify('sha1', message, publicKey, signatureOf(p7, 256))).toBe(true);
+    } finally {
+      issuerAndSerial.mockRestore();
+    }
+  });
+
+  it('reads issuer + serial from v1 and v3 certificates', () => {
+    expect(seckey.issuerAndSerial(FAKE_CERT_DER).equals(FAKE_ISSUER_AND_SERIAL)).toBe(true);
+    // v3: an explicit [0] version precedes the serial
+    const tbsBody = Buffer.concat([Buffer.from('a003020102', 'hex'), FAKE_TBS_BODY]);
+    const v3 = derSeq(derSeq(tbsBody));
+    expect(seckey.issuerAndSerial(v3).equals(FAKE_ISSUER_AND_SERIAL)).toBe(true);
+  });
+
+  it('getUrl appends the signature parameters only when a signer is given', () => {
+    expect(archivelink.getUrl('C1', BILL_A, 'data')).not.toContain('secKey');
+    const spy = vi.spyOn(seckey, 'readParams').mockReturnValue({
+      accessMode: 'r', authId: 'CN=X', expiration: '20260930130500', secKey: 'a+b/c=',
+    });
+    const url = archivelink.getUrl('C1', BILL_A, 'data', { keyPem: 'k', certPem: 'c', authId: 'CN=X' });
+    expect(url).toContain('&accessMode=r&authId=CN%3DX&expiration=20260930130500&secKey=a%2Bb%2Fc%3D');
+    spy.mockRestore();
+  });
+
+  it('signing is off (null signer) when no certificate is configured', async () => {
+    archivelink.clearSignerCache();
+    expect(await archivelink.getSigner()).toBeNull();
   });
 });
 

@@ -338,13 +338,13 @@ Authorization: Bearer <IAS client-credentials token of the S/4 client>
    and an SM59 HTTP destination to the document-delivery srv host that uses it.
 2. **Grant.** Maintainers add S/4's `azp` to the repository in `ARCHIVELINK_REPOSITORIES` in
    `secrets.mtaext`, e.g. `{"C1":{"allowedReaders":["<s4-azp>"]}}`.
-3. **Fetch path.** Maintainers create the BTP destination `OpenText_ArchiveCenter` (OnPremise,
-   through the Cloud Connector) pointing at the archive server that serves `C1` (the host in S/4
-   transaction OAC0). document-delivery calls `…/archive?get&contRep=C1&docId=…&compId=data` on it.
+3. **Fetch path.** Maintainers follow the [OTAC runbook](setup/archivelink-otac.md): the
+   `OpenText_OTAC` destination, the Cloud Connector mapping, and a signing certificate
+   registered read-only on the repository (`C1` only serves signed requests).
 
 | Symptom | Cause and fix |
 |---|---|
 | `400` from `linkForArchive` | `contRep` isn't 2 chars `[A-Z0-9]`, `archDocId` isn't 1–40 chars `[A-Za-z0-9]`, or a metadata field is longer than its TOA01 width. |
 | `404 not found` from `linkForArchive` | S/4's `azp` isn't in the repository's `allowedReaders`, the repository isn't configured, or the document was revoked. |
-| `/doc/<token>` returns `502` | The archive server couldn't be reached or refused the request. A `401`/`403` in the log usually means repository `C1` requires signed URLs (not supported yet); a `404` means the `ARC_DOC_ID` doesn't exist there. |
+| `/doc/<token>` returns `502` | The archive server couldn't be reached or refused the request. A `401 ICS:3001` in the log means our signing certificate isn't registered or enabled on the repository; `401 ICS:3003` means no signing certificate is configured; a `404` means the `ARC_DOC_ID` doesn't exist there. |
 | `500 archive registry is misconfigured` | `ARCHIVELINK_REPOSITORIES` in document-delivery is malformed. Maintainers' side. |

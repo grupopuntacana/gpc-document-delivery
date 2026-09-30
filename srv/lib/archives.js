@@ -10,7 +10,7 @@
  *
  *   ARCHIVELINK_REPOSITORIES='{
  *     "C1": {"allowedReaders": ["s4-prd-azp"],
- *            "destination": "OpenText_ArchiveCenter",   // optional, see below
+ *            "destination": "OpenText_OTAC",   // optional, see below
  *            "compId": "data"}                           // optional, see below
  *   }'
  *
@@ -19,7 +19,7 @@
  *   repository, S/4 does. No wildcard, no open-by-default — an empty list grants nothing.
  * - `destination` — the BTP destination whose base URL speaks the SAP Content Server HTTP
  *   protocol for this repository. Defaults to `ARCHIVELINK_DESTINATION` (itself defaulting to
- *   `OpenText_ArchiveCenter`), so one archive server serving several repositories is one
+ *   `OpenText_OTAC`), so one archive server serving several repositories is one
  *   destination.
  * - `compId` — the component to fetch. ArchiveLink stores a document's content as component
  *   `data` for single-component documents (PDF print lists, ISU_BILL); override per repository
@@ -36,7 +36,7 @@
 
 const REPOS_ENV = 'ARCHIVELINK_REPOSITORIES';
 
-const DEFAULT_DESTINATION = process.env.ARCHIVELINK_DESTINATION || 'OpenText_ArchiveCenter';
+const DEFAULT_DESTINATION = process.env.ARCHIVELINK_DESTINATION || 'OpenText_OTAC';
 const DEFAULT_COMP_ID = 'data';
 
 // TOA01 ARCHIV_ID is CHAR(2); ARC_DOC_ID is CHAR(40). Both are SAP-generated alphanumerics.

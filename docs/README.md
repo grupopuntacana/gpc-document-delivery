@@ -49,7 +49,8 @@ legible.
 - **[CONSUMING.md](CONSUMING.md)** — how a CAP app that stores files with
   `@gpc/attachments-opentext` claims them (`register`) and mints delivery links (`linkFor`):
   IAS identity, destination, bucket request, proxy model, troubleshooting.
-- **[setup/](setup/)** — AWS provisioning runbook (S3 bucket, CloudFront key pair, distribution).
+- **[setup/](setup/)** — AWS provisioning runbook (S3 bucket, CloudFront key pair, distribution)
+  and the [ArchiveLink / OTAC connectivity runbook](setup/archivelink-otac.md).
 - **[tasks/](tasks/)** — lightweight work tracker.
 
 For BTP setup, Credential Store, and the debugging/timing playbook, the root

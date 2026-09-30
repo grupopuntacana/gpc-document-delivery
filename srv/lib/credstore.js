@@ -206,6 +206,28 @@ async function getCloudFrontPrivateKey() {
   );
 }
 
+/**
+ * The ArchiveLink `secKey` signing private key (PEM) — ADR 0009. Credential Store `key` entry
+ * `ArchiveLinkSigningKey`, else `ARCHIVELINK_SIGNING_KEY` / `_PATH` locally. The matching
+ * certificate is public and lives in plain config (`ARCHIVELINK_SIGNING_CERT`).
+ * @returns {Promise<string>} PEM-encoded RSA or DSA private key.
+ */
+async function getArchiveLinkSigningKey() {
+  const creds = binding();
+  if (creds) {
+    const entry = await fetchEntry(creds, 'key', 'ArchiveLinkSigningKey');
+    const raw = Buffer.from(entry.value, 'base64').toString('utf8');
+    return raw.includes('-----BEGIN') ? raw : entry.value;
+  }
+  if (process.env.ARCHIVELINK_SIGNING_KEY) return process.env.ARCHIVELINK_SIGNING_KEY;
+  if (process.env.ARCHIVELINK_SIGNING_KEY_PATH) {
+    return fs.readFileSync(process.env.ARCHIVELINK_SIGNING_KEY_PATH, 'utf8');
+  }
+  throw new Error(
+    'ArchiveLink signing key unavailable: no credstore binding and no ARCHIVELINK_SIGNING_KEY[_PATH].',
+  );
+}
+
 // In-memory single-flight cache for the AWS S3 credentials. Like the HMAC secret these
 // are process-stable, so a per-instance memo avoids a Credential Store round trip on
 // every cache miss. Cache the in-flight *promise* so a concurrent burst collapses to one
@@ -273,6 +295,7 @@ function isBound() {
 module.exports = {
   getSharedLinkSecret,
   getCloudFrontPrivateKey,
+  getArchiveLinkSigningKey,
   getAwsCredentials,
   isBound,
   clearSecretCache,
