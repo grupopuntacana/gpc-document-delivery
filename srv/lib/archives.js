@@ -38,7 +38,7 @@ const { parseAcl } = require('./buckets');
 
 const REPOS_ENV = 'ARCHIVELINK_REPOSITORIES';
 
-const DEFAULT_DESTINATION = process.env.ARCHIVELINK_DESTINATION || 'OpenText_OTAC';
+const DEFAULT_DESTINATION = 'OpenText_OTAC';
 const DEFAULT_COMP_ID = 'data';
 
 // TOA01 ARCHIV_ID is CHAR(2); ARC_DOC_ID is CHAR(40). Both are SAP-generated alphanumerics.
@@ -87,6 +87,8 @@ function registry() {
     throw configError(`${REPOS_ENV} must be a JSON object of contRep -> { allowedReaders, ... }`);
   }
 
+  // Read with the rest of the env-driven config, so clearRegistryCache() picks up a change.
+  const defaultDestination = process.env.ARCHIVELINK_DESTINATION || DEFAULT_DESTINATION;
   _registry = new Map(Object.entries(parsed).map(([repo, entry]) => {
     if (!CONTREP_RE.test(repo)) {
       throw configError(`${REPOS_ENV}: "${repo}" is not a content repository id (2 chars, A-Z0-9)`);
@@ -101,7 +103,7 @@ function registry() {
         entry.allowedReaders,
         configError,
       ),
-      destination: optionalToken(repo, 'destination', entry.destination, DESTINATION_RE, DEFAULT_DESTINATION),
+      destination: optionalToken(repo, 'destination', entry.destination, DESTINATION_RE, defaultDestination),
       compId: optionalToken(repo, 'compId', entry.compId, COMP_ID_RE, DEFAULT_COMP_ID),
     }];
   }));

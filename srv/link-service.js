@@ -148,7 +148,18 @@ module.exports = class LinkService extends cds.ApplicationService {
       if (typeof docId !== 'string' || !docId.trim()) return req.reject(404, 'not found');
 
       const row = await SELECT.one.from(Documents).where({ docId });
-      if (!row || row.revoked || !delivery.mayRead(azp, row)) {
+      let allowed = false;
+      if (row && !row.revoked) {
+        try {
+          allowed = delivery.mayRead(azp, row);
+        } catch (err) {
+          // A malformed bucket / repository registry (or a row with an unknown source) is our
+          // fault, not the caller's: log the reason and answer 500, as linkForArchive does.
+          LOG.error('linkFor: read-scope registry is misconfigured:', err.message);
+          return req.reject(500, 'registry is misconfigured');
+        }
+      }
+      if (!allowed) {
         LOG.warn(`linkFor denied for azp "${azp}" (docId not found, not a reader, or revoked)`);
         return req.reject(404, 'not found');
       }

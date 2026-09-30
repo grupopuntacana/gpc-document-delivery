@@ -78,8 +78,10 @@ function getSigner() {
     if (!certPem) return null;
     const keyPem = await credstore.getArchiveLinkSigningKey();
     // `subject` is "CN=name" lines; the archive registers a certificate under an authId that
-    // conventionally is its subject (S/4 uses `CN=<SID>`).
-    const cn = /CN=([^\n,]+)/.exec(new crypto.X509Certificate(certPem).subject);
+    // conventionally is its subject (S/4 uses `CN=<SID>`). This default is a convenience for
+    // plain single-CN certificates: if the repository registered it under anything else, set
+    // ARCHIVELINK_AUTH_ID, which always wins.
+    const cn = /CN=([^\n,+]+)/.exec(new crypto.X509Certificate(certPem).subject);
     return seckey.createSigner({
       keyPem,
       certPem,

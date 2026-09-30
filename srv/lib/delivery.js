@@ -14,6 +14,8 @@
 
 const cds = require('@sap/cds');
 
+const LOG = cds.log('delivery');
+
 const archives = require('./archives');
 const archivelink = require('./archivelink');
 const buckets = require('./buckets');
@@ -123,14 +125,21 @@ const describeError = (err) => opentext.describeError(err);
  * Resolve a `docId` to a row that may still be delivered, or null when it is missing or
  * revoked. Revocation is per DOCUMENT: when a source can have several rows for one underlying
  * document (ArchiveLink — concurrent first claims can race into two rows, ADR 0009), any
- * revoked row for that locator revokes them all.
+ * revoked row for that locator revokes them all. A row with an unknown source is not deliverable.
  * @returns {Promise<?object>}
  */
 async function resolveDeliverable(docId) {
   const { Documents } = cds.entities('gpc.documentdelivery');
   const row = await SELECT.one.from(Documents).where({ docId });
   if (!row || row.revoked) return null;
-  const locator = sourceOf(row).locator(row);
+  const source = SOURCES[row.source];
+  if (!source) {
+    // Schema drift or a hand-written row. The anonymous caller gets the same opaque 404 as for
+    // a missing document; the operator gets the reason.
+    LOG.warn(`document row has an unsupported source ${JSON.stringify(row.source)}`);
+    return null;
+  }
+  const locator = source.locator(row);
   if (locator) {
     const revokedSibling = await SELECT.one.from(Documents).columns('docId')
       .where({ ...locator, revoked: true });

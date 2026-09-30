@@ -103,6 +103,7 @@ async function tryGet(label, signer) {
   say(`   ${String(info.data).trim().replace(/\r?\n/g, '\n   ')}`);
 
   say('\n2. getCert (certificates the repository trusts)');
+  // getCert only exists from protocol 0046 (0045 answers 500 ICS:5014); `get` stays on 0045.
   const certs = await call(`${archivelink.ARCHIVE_PATH}?getCert&pVersion=0046&contRep=${CONTREP}`);
   if (certs.status === 200) {
     const text = String(certs.data);

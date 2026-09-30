@@ -114,7 +114,11 @@ function createSigner({
   const type = key.asymmetricKeyType;
   if (type !== 'rsa' && type !== 'dsa') throw new Error(`unsupported signing key type: ${type}`);
   if (!DIGEST_OID[digest]) throw new Error(`unsupported digest: ${digest}`);
-  if (!authId) throw new Error('authId is required');
+  // The signed message is the raw bytes of the parameter values. A non-ASCII authId would be
+  // signed in one encoding and compared by the server in another, failing with no local error.
+  if (!/^[\x20-\x7e]+$/.test(authId || '')) {
+    throw new Error('authId is required and must be printable ASCII');
+  }
   return {
     authId,
     digest,

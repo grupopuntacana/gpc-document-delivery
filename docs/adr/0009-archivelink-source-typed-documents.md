@@ -143,7 +143,10 @@ Customer
 - **Inline allowlist + `nosniff` on both anonymous routes, and in the CDN cache.** Only PDF,
   common images and plain text are served `inline`. Anything else (HTML, SVG, XML) is served as
   an `attachment`, in stream mode and on objects written to the S3 cache alike, and every
-  streamed response carries `X-Content-Type-Options: nosniff`. An ArchiveLink repository can hold files
+  streamed response carries `X-Content-Type-Options: nosniff`. Objects **already** in the S3
+  cache (OpenText nodes cached before this change; no ArchiveLink object predates it) keep their
+  old `inline` header until the bucket's lifecycle rule expires them. If a non-allowlisted file
+  is known to be cached, remove it with `cdn.invalidate(nodeId)`. An ArchiveLink repository can hold files
   that ordinary S/4 users attached, and an inline `text/html` on this origin would be stored XSS
   via a public link. This changes `/invoice` for non-allowlisted types (e.g. `.docx` now downloads
   instead of being offered inline), which is what browsers did anyway. The v1 *token* is untouched.

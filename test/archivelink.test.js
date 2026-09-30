@@ -101,6 +101,18 @@ describe('archives registry (ARCHIVELINK_REPOSITORIES)', () => {
     expect(() => archives.resolveRepository('ZZ')).toThrow(expect.objectContaining({ code: 'UNKNOWN_REPOSITORY' }));
   });
 
+  it('re-reads ARCHIVELINK_DESTINATION when the registry cache is cleared', () => {
+    process.env.ARCHIVELINK_DESTINATION = 'Another_Default';
+    archives.clearRegistryCache();
+    try {
+      expect(archives.resolveRepository('C1').destination).toBe('Another_Default');
+      expect(archives.resolveRepository('C2').destination).toBe('Other_Archive'); // explicit wins
+    } finally {
+      delete process.env.ARCHIVELINK_DESTINATION;
+      archives.clearRegistryCache();
+    }
+  });
+
   it('validates the TOA01 locator shape (no query-string smuggling)', () => {
     expect(archives.isValidLocator('C1', BILL_A)).toBe(true);
     expect(archives.isValidLocator('c1', BILL_A)).toBe(false);
@@ -220,6 +232,10 @@ describe('secKey signing (signed Content Server URLs)', () => {
     expect(() => seckey.createSigner({
       keyPem, certPem: 'x', authId: 'CN=X', digest: 'md5',
     })).toThrow(/unsupported digest/);
+    expect(() => seckey.createSigner({ keyPem, certPem: 'x', authId: 'CN=Señal' }))
+      .toThrow(/printable ASCII/);
+    expect(() => seckey.createSigner({ keyPem, certPem: 'x', authId: '' }))
+      .toThrow(/printable ASCII/);
   });
 
   it('signing is off (null signer) when no certificate is configured', async () => {
@@ -445,6 +461,33 @@ describe('LinkService.linkForArchive + GET /doc/:token', () => {
     const days = (new Date(data.expiresAt).getTime() - Date.now()) / 86400000;
     expect(days).toBeGreaterThan(89);
     expect(days).toBeLessThanOrEqual(90);
+  });
+
+  it('linkFor answers 500 (not a bare throw) when the repository registry is misconfigured', async () => {
+    const { data } = await callAs(link, S4, 'linkForArchive', {
+      contRep: CONTREP, archDocId: 'JJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJ9',
+    });
+    const saved = process.env.ARCHIVELINK_REPOSITORIES;
+    process.env.ARCHIVELINK_REPOSITORIES = '{broken';
+    archives.clearRegistryCache();
+    try {
+      const err = await callAs(link, S4, 'linkFor', { docId: data.docId }).catch((e) => e);
+      expect(err.httpStatus).toBe(500);
+      expect(err.message).toBe('registry is misconfigured');
+    } finally {
+      process.env.ARCHIVELINK_REPOSITORIES = saved;
+      archives.clearRegistryCache();
+    }
+  });
+
+  it('/doc answers 404 (not 500) for a row with an unknown source', async () => {
+    const docId = 'row-with-unknown-source';
+    await INSERT.into(DOCUMENTS).entries({
+      docId, source: 'mystery', ownerAzp: S4, revoked: false, createdAt: new Date().toISOString(),
+    });
+    const { token } = await doctoken.makeDocToken(docId, { ttlSeconds: 60 });
+    const res = await GET(`/doc/${token}`).catch((e) => e.response);
+    expect(res.status).toBe(404);
   });
 
   it('/doc also serves an OpenText row (one v2 route for every source)', async () => {
