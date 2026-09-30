@@ -29,8 +29,6 @@
  * destination name (base URL + credentials) is configurable.
  */
 
-const crypto = require('crypto');
-
 const LOG = require('@sap/cds').log('archivelink');
 const credstore = require('./credstore');
 const opentext = require('./opentext');
@@ -65,18 +63,19 @@ function getSigner() {
   if (_signerPromise && now < _signerExpires) return _signerPromise;
   _signerExpires = now + SIGNER_TTL_MS;
   _signerPromise = (async () => {
-    const certPem = await credstore.getArchiveLinkSigningCert();
+    // Both halves come from the Credential Store: read them together (one round trip of wait,
+    // not two). The key's error is held back until we know a certificate exists, so "no
+    // certificate = signing off" still works without a key.
+    const [certPem, keyRead] = await Promise.all([
+      credstore.getArchiveLinkSigningCert(),
+      credstore.getArchiveLinkSigningKey().then((keyPem) => ({ keyPem }), (error) => ({ error })),
+    ]);
     if (!certPem) return null;
-    const keyPem = await credstore.getArchiveLinkSigningKey();
-    // `subject` is "CN=name" lines; the archive registers a certificate under an authId that
-    // conventionally is its subject (S/4 uses `CN=<SID>`). This default is a convenience for
-    // plain single-CN certificates: if the repository registered it under anything else, set
-    // ARCHIVELINK_AUTH_ID, which always wins.
-    const cn = /CN=([^\n,+]+)/.exec(new crypto.X509Certificate(certPem).subject);
+    if (keyRead.error) throw keyRead.error;
     return seckey.createSigner({
-      keyPem,
+      keyPem: keyRead.keyPem,
       certPem,
-      authId: process.env.ARCHIVELINK_AUTH_ID || (cn ? `CN=${cn[1].trim()}` : ''),
+      authId: process.env.ARCHIVELINK_AUTH_ID, // optional; defaults to CN=<certificate CN>
       digest: process.env.ARCHIVELINK_SIGNING_DIGEST || 'sha1',
     });
   })();
@@ -101,13 +100,14 @@ function getUrl(contRep, archDocId, compId, signer = null) {
   const q = [
     'get',
     `pVersion=${PROTOCOL_VERSION}`,
-    `contRep=${encodeURIComponent(contRep)}`,
-    `docId=${encodeURIComponent(archDocId)}`,
-    `compId=${encodeURIComponent(compId)}`,
+    `contRep=${seckey.encodeParam(contRep)}`,
+    `docId=${seckey.encodeParam(archDocId)}`,
+    `compId=${seckey.encodeParam(compId)}`,
   ];
   if (signer) {
+    // Already encoded by seckey (the same strings it signed): append as they are.
     const sig = seckey.readParams({ contRep, docId: archDocId }, signer);
-    q.push(...Object.entries(sig).map(([k, v]) => `${k}=${encodeURIComponent(v)}`));
+    q.push(...Object.entries(sig).map(([k, v]) => `${k}=${v}`));
   }
   return `${ARCHIVE_PATH}?${q.join('&')}`;
 }

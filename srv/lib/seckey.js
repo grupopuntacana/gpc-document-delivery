@@ -105,25 +105,38 @@ const OID = {
  * Parse and validate the signing material ONCE. Everything a signature needs that does not
  * depend on the message — the key object, the certificate's issuer+serial, the algorithm
  * identifiers — is computed here, so signing a request is one `crypto.sign` plus a few concats.
- * @param {{keyPem:string, certPem:string, authId:string, digest?:('sha1'|'sha256')}} material
+ * `authId` defaults to `CN=<certificate CN>`: the archive registers a certificate under an authId
+ * that conventionally is its subject (S/4 uses `CN=<SID>`). The default suits plain single-CN
+ * certificates; pass `authId` when the repository registered it under anything else.
+ * @param {{keyPem:string, certPem:string, authId?:string, digest?:('sha1'|'sha256')}} material
  */
 function createSigner({
-  keyPem, certPem, authId, digest = 'sha1',
+  keyPem, certPem, authId: requestedAuthId, digest = 'sha1',
 }) {
   const key = crypto.createPrivateKey(keyPem);
   const type = key.asymmetricKeyType;
   if (type !== 'rsa' && type !== 'dsa') throw new Error(`unsupported signing key type: ${type}`);
   if (!DIGEST_OID[digest]) throw new Error(`unsupported digest: ${digest}`);
-  // The signed message is the raw bytes of the parameter values. A non-ASCII authId would be
-  // signed in one encoding and compared by the server in another, failing with no local error.
-  if (!/^[\x20-\x7e]+$/.test(authId || '')) {
+  const cert = new crypto.X509Certificate(certPem);
+  const cn = /CN=([^\n,+]+)/.exec(cert.subject || '');
+  const authId = requestedAuthId || (cn ? `CN=${cn[1].trim()}` : '');
+  // Policy, not encoding: authIds are plain ASCII names (the certificate registrations we have
+  // are), and an empty one would sign as nobody.
+  if (!/^[\x20-\x7e]+$/.test(authId)) {
     throw new Error('authId is required and must be printable ASCII');
+  }
+  // The key and the certificate are stored as two entries and could be caught mid-rotation
+  // (new certificate, old key). Refuse a mismatched pair here: the caller's cache drops a failed
+  // signer and retries on the next request, instead of caching one that the server would reject
+  // (ICS:3009) for the whole cache lifetime.
+  if (!crypto.createPublicKey(key).equals(cert.publicKey)) {
+    throw new Error('the signing key does not match the signing certificate');
   }
   return {
     authId,
     digest,
     key,
-    signerId: seq(issuerAndSerial(new crypto.X509Certificate(certPem).raw)),
+    signerId: seq(issuerAndSerial(cert.raw)),
     digestAlg: seq(oid(DIGEST_OID[digest]), NULL),
     signatureAlg: type === 'rsa' ? seq(oid(OID.rsaEncryption), NULL) : seq(oid(OID.dsa)),
   };
@@ -163,31 +176,40 @@ function expirationStamp(date) {
 const SIGNATURE_TTL_SECONDS = 300;
 
 /**
- * The four signature parameters for a read of one document.
+ * How a parameter value is written into the Content Server URL. The ONE encoding rule: the
+ * server verifies the signature against the values as they appear in the URL (Archive Center
+ * 25.4: signing the plain `CN=X` fails with ICS:3009, signing `CN%3DX` succeeds), so the URL and
+ * the signed message must be built from the same encoded strings. archivelink.getUrl uses this
+ * for its own parameters too.
+ */
+const encodeParam = encodeURIComponent;
+
+/**
+ * The four signature parameters for a read of one document, ALREADY URL-encoded: append them to
+ * the query string as they are, never encode them again.
  * @param {{contRep:string, docId:string}} doc
  * @param {ReturnType<typeof createSigner>} signer
  * @param {Date} [now]
  * @returns {{accessMode:string, authId:string, expiration:string, secKey:string}}
  */
 function readParams({ contRep, docId }, signer, now = new Date()) {
-  const accessMode = 'r';
-  const { authId } = signer;
-  const expiration = expirationStamp(new Date(now.getTime() + SIGNATURE_TTL_SECONDS * 1000));
-  // The server verifies against the values AS THEY APPEAR IN THE URL, i.e. still URL-encoded
-  // (found against Archive Center 25.4: signing the plain `CN=X` fails with ICS:3009, signing
-  // `CN%3DX` succeeds). Encode here exactly as archivelink.getUrl does.
-  const message = Buffer.from(
-    [contRep, docId, accessMode, authId, expiration].map(encodeURIComponent).join(''),
-    'latin1',
-  );
-  return {
-    accessMode, authId, expiration, secKey: signDetached(message, signer).toString('base64'),
+  const signed = {
+    accessMode: 'r',
+    authId: signer.authId,
+    expiration: expirationStamp(new Date(now.getTime() + SIGNATURE_TTL_SECONDS * 1000)),
   };
+  const encoded = Object.fromEntries(Object.entries(signed).map(([k, v]) => [k, encodeParam(v)]));
+  const { accessMode, authId, expiration } = encoded;
+  const message = Buffer.from(
+    [encodeParam(contRep), encodeParam(docId), accessMode, authId, expiration].join(''),
+  );
+  return { ...encoded, secKey: encodeParam(signDetached(message, signer).toString('base64')) };
 }
 
 module.exports = {
   createSigner,
   readParams,
+  encodeParam,
   // exported for unit tests
   signDetached,
   issuerAndSerial,

@@ -84,7 +84,9 @@ Then set `ARCHIVELINK_REPOSITORIES` in `secrets.mtaext` to the S/4 caller grant 
 
 **Rotation:** generate a new pair, have the new certificate registered on the repository
 *before* switching, then write both entries. Ask for the old certificate to be removed once
-reads work with the new one.
+reads work with the new one. Between the two writes the service may see a new certificate with
+the old key; it refuses such a pair and retries on the next request, so reads fail for at most the
+seconds between the writes, not for the 10-minute cache.
 
 The Destination service's certificate store is not the place for this pair. It holds keystores
 a destination uses to authenticate the *connection* (TLS client certificates); the archive does

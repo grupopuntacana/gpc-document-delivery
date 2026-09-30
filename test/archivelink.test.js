@@ -188,13 +188,18 @@ describe('secKey signing (signed Content Server URLs)', () => {
     const issuerAndSerial = vi.spyOn(crypto, 'X509Certificate')
       .mockImplementation(function Fake() {
         this.raw = FAKE_CERT_DER;
+        this.subject = 'CN=TEST_SIGNER';
+        this.publicKey = publicKey; // the certificate matches the signing key
       });
     try {
       const now = new Date('2026-09-30T13:00:00Z');
-      const signer = seckey.createSigner({ keyPem, certPem: 'ignored', authId: 'CN=TEST_SIGNER' });
+      // authId defaults to the certificate's CN
+      const signer = seckey.createSigner({ keyPem, certPem: 'ignored' });
+      expect(signer.authId).toBe('CN=TEST_SIGNER');
+      // readParams returns the values URL-encoded, ready to append (the strings it signed)
       const out = seckey.readParams({ contRep: 'C1', docId: BILL_A }, signer, now);
-      expect(out).toMatchObject({ accessMode: 'r', authId: 'CN=TEST_SIGNER', expiration: '20260930130500' });
-      const p7 = Buffer.from(out.secKey, 'base64');
+      expect(out).toMatchObject({ accessMode: 'r', authId: 'CN%3DTEST_SIGNER', expiration: '20260930130500' });
+      const p7 = Buffer.from(decodeURIComponent(out.secKey), 'base64');
       expect(p7[0]).toBe(0x30); // DER SEQUENCE (ContentInfo)
       // signedData OID 1.2.840.113549.1.7.2
       expect(p7.includes(Buffer.from('06092a864886f70d010702', 'hex'))).toBe(true);
@@ -210,6 +215,20 @@ describe('secKey signing (signed Content Server URLs)', () => {
     }
   });
 
+  it('createSigner refuses a key that does not match the certificate (mid-rotation pair)', () => {
+    const other = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 }).publicKey;
+    const stub = vi.spyOn(crypto, 'X509Certificate').mockImplementation(function Fake() {
+      this.raw = FAKE_CERT_DER;
+      this.publicKey = other;
+    });
+    try {
+      expect(() => seckey.createSigner({ keyPem, certPem: 'ignored', authId: 'CN=X' }))
+        .toThrow(/does not match the signing certificate/);
+    } finally {
+      stub.mockRestore();
+    }
+  });
+
   it('reads issuer + serial from v1 and v3 certificates', () => {
     expect(seckey.issuerAndSerial(FAKE_CERT_DER).equals(FAKE_ISSUER_AND_SERIAL)).toBe(true);
     // v3: an explicit [0] version precedes the serial
@@ -220,10 +239,11 @@ describe('secKey signing (signed Content Server URLs)', () => {
 
   it('getUrl appends the signature parameters only when a signer is given', () => {
     expect(archivelink.getUrl('C1', BILL_A, 'data')).not.toContain('secKey');
+    // readParams returns already-encoded values (the ones it signed): getUrl must not re-encode
     const spy = vi.spyOn(seckey, 'readParams').mockReturnValue({
-      accessMode: 'r', authId: 'CN=X', expiration: '20260930130500', secKey: 'a+b/c=',
+      accessMode: 'r', authId: 'CN%3DX', expiration: '20260930130500', secKey: 'a%2Bb%2Fc%3D',
     });
-    const url = archivelink.getUrl('C1', BILL_A, 'data', { keyPem: 'k', certPem: 'c', authId: 'CN=X' });
+    const url = archivelink.getUrl('C1', BILL_A, 'data', { authId: 'CN=X' });
     expect(url).toContain('&accessMode=r&authId=CN%3DX&expiration=20260930130500&secKey=a%2Bb%2Fc%3D');
     spy.mockRestore();
   });
@@ -236,10 +256,19 @@ describe('secKey signing (signed Content Server URLs)', () => {
     expect(() => seckey.createSigner({
       keyPem, certPem: 'x', authId: 'CN=X', digest: 'md5',
     })).toThrow(/unsupported digest/);
-    expect(() => seckey.createSigner({ keyPem, certPem: 'x', authId: 'CN=Señal' }))
-      .toThrow(/printable ASCII/);
-    expect(() => seckey.createSigner({ keyPem, certPem: 'x', authId: '' }))
-      .toThrow(/printable ASCII/);
+    const stub = vi.spyOn(crypto, 'X509Certificate').mockImplementation(function Fake() {
+      this.raw = FAKE_CERT_DER;
+      this.subject = 'O=No CN here';
+      this.publicKey = publicKey;
+    });
+    try {
+      expect(() => seckey.createSigner({ keyPem, certPem: 'x', authId: 'CN=Señal' }))
+        .toThrow(/printable ASCII/);
+      // no authId given and no CN to default from
+      expect(() => seckey.createSigner({ keyPem, certPem: 'x' })).toThrow(/printable ASCII/);
+    } finally {
+      stub.mockRestore();
+    }
   });
 
   it('signing is off (null signer) when no certificate is configured', async () => {
@@ -251,7 +280,7 @@ describe('secKey signing (signed Content Server URLs)', () => {
 describe('signing certificate source (Credential Store, env fallback)', () => {
   const PEM = '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n';
   const original = { ...credstore.deps };
-  const notFound = () => Object.assign(new Error('Credential Store key/x -> HTTP 404'), { status: 404 });
+  const storeError = (status) => Object.assign(new Error(`Credential Store key/x -> HTTP ${status}`), { status });
 
   beforeEach(() => {
     Object.assign(credstore.deps, original);
@@ -285,7 +314,7 @@ describe('signing certificate source (Credential Store, env fallback)', () => {
   it('a bound store with no entry falls back to env, then to null', async () => {
     credstore.deps.binding = () => ({ url: 'https://credstore' });
     credstore.deps.fetchEntry = vi.fn(async () => {
-      throw notFound();
+      throw storeError(404);
     });
     expect(await credstore.getArchiveLinkSigningCert()).toBeNull();
     process.env.ARCHIVELINK_SIGNING_CERT = PEM;
@@ -295,13 +324,12 @@ describe('signing certificate source (Credential Store, env fallback)', () => {
   it('a store failure other than 404 is an error, never "signing off"', async () => {
     credstore.deps.binding = () => ({ url: 'https://credstore' });
     credstore.deps.fetchEntry = vi.fn(async () => {
-      throw Object.assign(new Error('Credential Store key/x -> HTTP 503'), { status: 503 });
+      throw storeError(503);
     });
     await expect(credstore.getArchiveLinkSigningCert()).rejects.toThrow(/HTTP 503/);
     // and the fetcher refuses to go out unsigned when it cannot tell
     archivelink.clearSignerCache();
     await expect(archivelink.getSigner()).rejects.toThrow(/HTTP 503/);
-    archivelink.clearSignerCache();
   });
 });
 

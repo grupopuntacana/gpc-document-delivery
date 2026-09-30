@@ -133,6 +133,10 @@ async function fetchEntry(creds, kind, name) {
   return JSON.parse(Buffer.from(plaintext).toString('utf8'));
 }
 
+// The seam tests mock (test/archivelink.test.js): the binding lookup and the REST read. Every
+// read below goes through it, so any Credential Store flow can be tested without BTP.
+const deps = { binding, fetchEntry };
+
 // In-memory single-flight cache for the HMAC secret. The secret is process-stable
 // (the same value across every app instance), so a per-instance memo is correct and
 // far cheaper than a Credential Store round trip per token — listing N documents mints
@@ -146,9 +150,9 @@ let _secretExpires = 0;
 
 /** Uncached read of the secret (credstore binding, else env fallback). */
 async function readSharedLinkSecret() {
-  const creds = binding();
+  const creds = deps.binding();
   if (creds) {
-    const entry = await fetchEntry(creds, 'password', 'SHARED_LINK_SECRET');
+    const entry = await deps.fetchEntry(creds, 'password', 'SHARED_LINK_SECRET');
     return entry.value;
   }
   const fromEnv = process.env.SHARED_LINK_SECRET;
@@ -185,9 +189,6 @@ function clearSecretCache() {
   _secretPromise = null;
   _secretExpires = 0;
 }
-
-// The seam tests mock: the binding lookup and the REST read (see test/selftest.test.js).
-const deps = { binding, fetchEntry };
 
 /** A Credential Store `key` entry as PEM. Entries carry the material base64-encoded in `value`. */
 async function readPemEntry(creds, entryName) {
@@ -248,7 +249,8 @@ async function getArchiveLinkSigningCert() {
     try {
       return await readPemEntry(creds, 'ArchiveLinkSigningCert');
     } catch (err) {
-      // Absent is a legal state (signing off / env fallback); anything else is a real failure.
+      // Absent is a legal state (signing off, or the env fallback while a tier still carries the
+      // certificate in config rather than the store); anything else is a real failure.
       if (err.status !== 404) throw err;
     }
   }
@@ -268,11 +270,11 @@ let _awsExpires = 0;
 
 /** Uncached read of the AWS S3 credentials (credstore binding, else env fallback). */
 async function readAwsCredentials() {
-  const creds = binding();
+  const creds = deps.binding();
   if (creds) {
     const [id, secret] = await Promise.all([
-      fetchEntry(creds, 'password', 'AWS_ACCESS_KEY_ID'),
-      fetchEntry(creds, 'password', 'AWS_SECRET_ACCESS_KEY'),
+      deps.fetchEntry(creds, 'password', 'AWS_ACCESS_KEY_ID'),
+      deps.fetchEntry(creds, 'password', 'AWS_SECRET_ACCESS_KEY'),
     ]);
     return { accessKeyId: id.value, secretAccessKey: secret.value };
   }
@@ -316,7 +318,7 @@ function clearAwsCache() {
  * or env fallback (false)?
  */
 function isBound() {
-  return binding() !== null;
+  return deps.binding() !== null;
 }
 
 module.exports = {
