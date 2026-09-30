@@ -119,7 +119,8 @@ async function fetchEntry(creds, kind, name) {
     jwe = await res.text();
   }
   if (status < 200 || status >= 300) {
-    throw new Error(`Credential Store ${kind}/${name} -> HTTP ${status}`);
+    // `status` rides on the error so a caller can tell "entry absent" (404) from a real failure.
+    throw Object.assign(new Error(`Credential Store ${kind}/${name} -> HTTP ${status}`), { status });
   }
 
   // Response body is a compact JWE encrypted to our client key.
@@ -185,20 +186,32 @@ function clearSecretCache() {
   _secretExpires = 0;
 }
 
-/**
- * Read a PEM private key: Credential Store `key` entry `entryName` when bound, else the
- * `<envName>` / `<envName>_PATH` env fallback for local/hybrid/test runs.
- */
-async function getPemKey(entryName, envName, label) {
-  const creds = binding();
-  if (creds) {
-    const entry = await fetchEntry(creds, 'key', entryName);
-    // Credential Store 'key' entries carry the material in `value` (base64) — normalize to PEM.
-    const raw = Buffer.from(entry.value, 'base64').toString('utf8');
-    return raw.includes('-----BEGIN') ? raw : entry.value;
-  }
+// The seam tests mock: the binding lookup and the REST read (see test/selftest.test.js).
+const deps = { binding, fetchEntry };
+
+/** A Credential Store `key` entry as PEM. Entries carry the material base64-encoded in `value`. */
+async function readPemEntry(creds, entryName) {
+  const entry = await deps.fetchEntry(creds, 'key', entryName);
+  const raw = Buffer.from(entry.value, 'base64').toString('utf8');
+  return raw.includes('-----BEGIN') ? raw : entry.value;
+}
+
+/** The `<envName>` / `<envName>_PATH` fallback for local/hybrid/test runs; null when unset. */
+function pemFromEnv(envName) {
   if (process.env[envName]) return process.env[envName];
   if (process.env[`${envName}_PATH`]) return fs.readFileSync(process.env[`${envName}_PATH`], 'utf8');
+  return null;
+}
+
+/**
+ * Read a PEM private key: Credential Store `key` entry `entryName` when bound, else the env
+ * fallback. A key that should exist and doesn't is an error.
+ */
+async function getPemKey(entryName, envName, label) {
+  const creds = deps.binding();
+  if (creds) return readPemEntry(creds, entryName);
+  const pem = pemFromEnv(envName);
+  if (pem) return pem;
   throw new Error(`${label} unavailable: no credstore binding and no ${envName}[_PATH].`);
 }
 
@@ -211,12 +224,35 @@ function getCloudFrontPrivateKey() {
 }
 
 /**
- * The ArchiveLink `secKey` signing private key (PEM) — ADR 0009. The matching certificate is
- * public and lives in plain config (`ARCHIVELINK_SIGNING_CERT`).
+ * The ArchiveLink `secKey` signing private key (PEM) — ADR 0009. Its certificate is the sibling
+ * entry, `getArchiveLinkSigningCert`.
  * @returns {Promise<string>} PEM-encoded RSA or DSA private key.
  */
 function getArchiveLinkSigningKey() {
   return getPemKey('ArchiveLinkSigningKey', 'ARCHIVELINK_SIGNING_KEY', 'ArchiveLink signing key');
+}
+
+/**
+ * The certificate registered on the ArchiveLink repository for `secKey`-signed reads (PEM), or
+ * null when none is configured — which is how signing is switched off (ADR 0009).
+ *
+ * It lives beside its private key: Credential Store `key` entry `ArchiveLinkSigningCert`. The
+ * certificate is public, but the two are one pair and rotate together, so they are stored and
+ * replaced in one place, with no redeploy. `ARCHIVELINK_SIGNING_CERT` / `_PATH` is the fallback
+ * for local/hybrid runs, and for a bound store that has no entry yet.
+ * @returns {Promise<?string>}
+ */
+async function getArchiveLinkSigningCert() {
+  const creds = deps.binding();
+  if (creds) {
+    try {
+      return await readPemEntry(creds, 'ArchiveLinkSigningCert');
+    } catch (err) {
+      // Absent is a legal state (signing off / env fallback); anything else is a real failure.
+      if (err.status !== 404) throw err;
+    }
+  }
+  return pemFromEnv('ARCHIVELINK_SIGNING_CERT');
 }
 
 // In-memory single-flight cache for the AWS S3 credentials. Like the HMAC secret these
@@ -287,9 +323,12 @@ module.exports = {
   getSharedLinkSecret,
   getCloudFrontPrivateKey,
   getArchiveLinkSigningKey,
+  getArchiveLinkSigningCert,
   getAwsCredentials,
   isBound,
   clearSecretCache,
   clearAwsCache,
   NAMESPACE,
+  // exported for unit tests
+  deps,
 };

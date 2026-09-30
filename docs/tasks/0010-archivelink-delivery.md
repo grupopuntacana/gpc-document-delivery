@@ -46,7 +46,7 @@ short-lived link for them without uploading the bytes again. The BTP paths (`Ing
 - [x] Direct (in-office) signed read returns the PDF (`scripts/probe-archivelink.js`, step 4).
       Finding: the signed message must carry `authId` URL-encoded, as sent
 - [ ] Same probe through the Cloud Connector (`cds bind --exec`), once Basis adds the mapping
-- [ ] Key into the Credential Store (`ArchiveLinkSigningKey`), certificate into `secrets.mtaext`
+- [x] DEV key pair in the Credential Store (`ArchiveLinkSigningKey`, `ArchiveLinkSigningCert`)
 - [ ] S/4: IAS client + SM59 destinations; put its `azp` in `ARCHIVELINK_REPOSITORIES`
       ([usage draft](../CONSUMING.md#s4-archivelink-documents))
 - [x] `DELIVERY_BASE_URL` declared in `mta.yaml` as the service's own route (it was only set by

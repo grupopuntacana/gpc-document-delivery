@@ -1,5 +1,5 @@
 import {
-  describe, it, expect, vi, beforeAll, beforeEach,
+  describe, it, expect, vi, beforeAll, beforeEach, afterAll,
 } from 'vitest';
 import { createRequire } from 'node:module';
 
@@ -34,6 +34,7 @@ const archives = require('../srv/lib/archives.js');
 const archivelink = require('../srv/lib/archivelink.js');
 const buckets = require('../srv/lib/buckets.js');
 const cdn = require('../srv/lib/cdn.js');
+const credstore = require('../srv/lib/credstore.js');
 const delivery = require('../srv/lib/delivery.js');
 const doctoken = require('../srv/lib/doctoken.js');
 const seckey = require('../srv/lib/seckey.js');
@@ -244,6 +245,63 @@ describe('secKey signing (signed Content Server URLs)', () => {
   it('signing is off (null signer) when no certificate is configured', async () => {
     archivelink.clearSignerCache();
     expect(await archivelink.getSigner()).toBeNull();
+  });
+});
+
+describe('signing certificate source (Credential Store, env fallback)', () => {
+  const PEM = '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n';
+  const original = { ...credstore.deps };
+  const notFound = () => Object.assign(new Error('Credential Store key/x -> HTTP 404'), { status: 404 });
+
+  beforeEach(() => {
+    Object.assign(credstore.deps, original);
+    delete process.env.ARCHIVELINK_SIGNING_CERT;
+    delete process.env.ARCHIVELINK_SIGNING_CERT_PATH;
+  });
+
+  // Leave the real seam and an empty signer cache behind for the suites that follow.
+  afterAll(() => {
+    Object.assign(credstore.deps, original);
+    archivelink.clearSignerCache();
+  });
+
+  it('is null when nothing is configured — signing stays off', async () => {
+    expect(await credstore.getArchiveLinkSigningCert()).toBeNull();
+  });
+
+  it('reads the env fallback when no Credential Store is bound', async () => {
+    process.env.ARCHIVELINK_SIGNING_CERT = PEM;
+    expect(await credstore.getArchiveLinkSigningCert()).toBe(PEM);
+  });
+
+  it('reads the ArchiveLinkSigningCert entry when a Credential Store is bound', async () => {
+    credstore.deps.binding = () => ({ url: 'https://credstore' });
+    credstore.deps.fetchEntry = vi.fn(async () => ({ value: Buffer.from(PEM).toString('base64') }));
+    process.env.ARCHIVELINK_SIGNING_CERT = 'the-store-wins';
+    expect(await credstore.getArchiveLinkSigningCert()).toBe(PEM);
+    expect(credstore.deps.fetchEntry).toHaveBeenCalledWith(expect.anything(), 'key', 'ArchiveLinkSigningCert');
+  });
+
+  it('a bound store with no entry falls back to env, then to null', async () => {
+    credstore.deps.binding = () => ({ url: 'https://credstore' });
+    credstore.deps.fetchEntry = vi.fn(async () => {
+      throw notFound();
+    });
+    expect(await credstore.getArchiveLinkSigningCert()).toBeNull();
+    process.env.ARCHIVELINK_SIGNING_CERT = PEM;
+    expect(await credstore.getArchiveLinkSigningCert()).toBe(PEM);
+  });
+
+  it('a store failure other than 404 is an error, never "signing off"', async () => {
+    credstore.deps.binding = () => ({ url: 'https://credstore' });
+    credstore.deps.fetchEntry = vi.fn(async () => {
+      throw Object.assign(new Error('Credential Store key/x -> HTTP 503'), { status: 503 });
+    });
+    await expect(credstore.getArchiveLinkSigningCert()).rejects.toThrow(/HTTP 503/);
+    // and the fetcher refuses to go out unsigned when it cannot tell
+    archivelink.clearSignerCache();
+    await expect(archivelink.getSigner()).rejects.toThrow(/HTTP 503/);
+    archivelink.clearSignerCache();
   });
 });
 

@@ -573,5 +573,5 @@ other document.
 | `deliveryUrl` starts with `/doc/` | `DELIVERY_BASE_URL` is missing on the deployed app. It comes from `mta.yaml`; redeploy. |
 | The link returns `403 invalid token: expired` | It outlived its `ttlDays`. Request a new one. |
 | The link returns `404` | The document was revoked. |
-| The link returns `502` | document-delivery couldn't read from the archive. In its log, `401 ICS:3001` means the signing certificate isn't registered or enabled on the repository; `401 ICS:3003` means no signing certificate is configured; `404` means that `ARC_DOC_ID` doesn't exist in the repository. |
+| The link returns `502` | document-delivery couldn't read from the archive. In its log, `401 ICS:3001` means the signing certificate isn't registered or enabled on the repository; `401 ICS:3003` means no signing certificate is configured; `401 ICS:3009` means the signature was rejected; `404` means that `ARC_DOC_ID` doesn't exist in the repository. |
 | `500 archive registry is misconfigured` | `ARCHIVELINK_REPOSITORIES` in document-delivery is malformed. Maintainers' side. |

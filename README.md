@@ -129,8 +129,9 @@ node scripts/credstore-put.js key      CloudFrontPrivateKey  "$(cat ../python/op
 # Option B (cdn mode) also needs the S3 credentials:
 node scripts/credstore-put.js password AWS_ACCESS_KEY_ID     '<aws-access-key-id>'
 node scripts/credstore-put.js password AWS_SECRET_ACCESS_KEY '<aws-secret-access-key>'
-# S/4 ArchiveLink delivery also needs the key that signs reads from the archive:
-node scripts/credstore-put.js key      ArchiveLinkSigningKey "$(cat certs/archivelink-signing-dev.key)"
+# S/4 ArchiveLink delivery also needs the key pair that signs reads from the archive:
+node scripts/credstore-put.js key      ArchiveLinkSigningKey  "$(cat certs/archivelink-signing-dev.key)"
+node scripts/credstore-put.js key      ArchiveLinkSigningCert "$(cat certs/archivelink-signing-dev.crt)"
 
 # 3. Cleanup once done — the service key carries live binding creds
 cf delete-service-key credstore-shared cli
@@ -379,8 +380,7 @@ Documents S/4 archived through ArchiveLink get links too, without being uploaded
 |---|---|
 | `ARCHIVELINK_REPOSITORIES` | `{"C1":{"allowedReaders":["<azp>"],"destination"?,"compId"?}}` — who may mint links per repository. Set it in `secrets.mtaext`. |
 | `ARCHIVELINK_DESTINATION` | Default destination for repositories that don't name one (`OpenText_OTAC`). |
-| `ARCHIVELINK_SIGNING_CERT` / `_PATH` | The certificate registered on the repository. Signing is on when this is set. |
-| `ARCHIVELINK_SIGNING_KEY` / `_PATH` | Its private key, for local runs. On BTP it is the Credential Store key `ArchiveLinkSigningKey`. |
+| `ARCHIVELINK_SIGNING_CERT` / `_PATH`, `ARCHIVELINK_SIGNING_KEY` / `_PATH` | The signing key pair, **for local runs only**. On BTP both live in the Credential Store (`ArchiveLinkSigningCert`, `ArchiveLinkSigningKey`), so they rotate together without a redeploy. Signing is on when a certificate is found. |
 | `ARCHIVELINK_AUTH_ID` | The ID the certificate is registered under. Default `CN=<certificate CN>`. |
 | `DOC_LINK_MAX_TTL_DAYS` | Upper bound for a `/doc` link's lifetime (90). |
 | `DELIVERY_BASE_URL` | Base of the links handed to other systems: this service's own route. Set in `mta.yaml` (`${default-url}`). Unset, links come back as a path only. The demo portal doesn't use it; it builds relative links that its router forwards to the service. |

@@ -12,13 +12,14 @@
  *
  * **Signed URLs.** A repository that enforces security (C1 does — an unsigned read answers
  * `401 ICS:3003 … parameter secKey`) needs `accessMode`/`authId`/`expiration`/`secKey` on the
- * URL (`seckey.js`). Signing switches on when a certificate is configured:
+ * URL (`seckey.js`). Signing switches on when a certificate is configured. The key pair lives in
+ * the Credential Store, one entry each, so it rotates in one place with no redeploy:
  *
- *   ARCHIVELINK_SIGNING_CERT[_PATH]  the certificate registered on the repository (public, PEM)
- *   ArchiveLinkSigningKey            its private key — Credential Store, or
- *                                    ARCHIVELINK_SIGNING_KEY[_PATH] locally
- *   ARCHIVELINK_AUTH_ID              the id it is registered under; default `CN=<cert CN>`
- *   ARCHIVELINK_SIGNING_DIGEST       sha1 (protocol default) | sha256
+ *   ArchiveLinkSigningCert      the certificate registered on the repository (public, PEM)
+ *   ArchiveLinkSigningKey       its private key
+ *   (locally: ARCHIVELINK_SIGNING_CERT[_PATH] and ARCHIVELINK_SIGNING_KEY[_PATH])
+ *   ARCHIVELINK_AUTH_ID         the id it is registered under; default `CN=<cert CN>`
+ *   ARCHIVELINK_SIGNING_DIGEST  sha1 (protocol default) | sha256
  *
  * With no certificate configured requests go out unsigned, which is what a repository without
  * security expects. Authentication the destination itself carries is applied by the SAP Cloud
@@ -29,7 +30,6 @@
  */
 
 const crypto = require('crypto');
-const fs = require('fs');
 
 const LOG = require('@sap/cds').log('archivelink');
 const credstore = require('./credstore');
@@ -56,15 +56,6 @@ const SIGNER_TTL_MS = Number(process.env.ARCHIVELINK_SIGNER_TTL_MS ?? 10 * 60 * 
 let _signerPromise = null;
 let _signerExpires = 0;
 
-/** The configured certificate (PEM), or null when signing is off. */
-function signingCert() {
-  if (process.env.ARCHIVELINK_SIGNING_CERT) return process.env.ARCHIVELINK_SIGNING_CERT;
-  if (process.env.ARCHIVELINK_SIGNING_CERT_PATH) {
-    return fs.readFileSync(process.env.ARCHIVELINK_SIGNING_CERT_PATH, 'utf8');
-  }
-  return null;
-}
-
 /**
  * The parsed signer (`seckey.createSigner`), or null when no certificate is configured.
  * @returns {Promise<?ReturnType<typeof seckey.createSigner>>}
@@ -74,7 +65,7 @@ function getSigner() {
   if (_signerPromise && now < _signerExpires) return _signerPromise;
   _signerExpires = now + SIGNER_TTL_MS;
   _signerPromise = (async () => {
-    const certPem = signingCert();
+    const certPem = await credstore.getArchiveLinkSigningCert();
     if (!certPem) return null;
     const keyPem = await credstore.getArchiveLinkSigningKey();
     // `subject` is "CN=name" lines; the archive registers a certificate under an authId that
