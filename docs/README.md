@@ -46,9 +46,10 @@ legible.
   (the solution landscape by network zone).
 - **[endpoint-discovery.md](endpoint-discovery.md)** — OpenText REST endpoints probed during
   the spike, and the OTDS-federation finding.
-- **[CONSUMING.md](CONSUMING.md)** — how a CAP app that stores files with
-  `@gpc/attachments-opentext` claims them (`register`) and mints delivery links (`linkFor`):
-  IAS identity, destination, bucket request, proxy model, troubleshooting.
+- **[CONSUMING.md](CONSUMING.md)** — how another system gets delivery links. For a CAP app that
+  stores files with `@gpc/attachments-opentext`: `register` and `linkFor`, IAS identity,
+  destination, bucket request, proxy model. For S/4: `linkForArchive` with its ArchiveLink
+  reference, including an ABAP sketch. Troubleshooting for both.
 - **[setup/](setup/)** — AWS provisioning runbook (S3 bucket, CloudFront key pair, distribution)
   and the [ArchiveLink / OTAC connectivity runbook](setup/archivelink-otac.md).
 - **[tasks/](tasks/)** — lightweight work tracker.

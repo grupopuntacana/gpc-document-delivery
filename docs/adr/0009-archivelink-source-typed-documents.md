@@ -80,7 +80,9 @@ with a **key derived** from `SHARED_LINK_SECRET` (`HMAC(secret, "gpc-document-de
 There is one secret to rotate, but a v1 signature can never validate as v2 or the other way round.
 The route resolves the row on every request, which gives two things:
 
-- it serves **every** row source through one route (`srv/lib/delivery.js` dispatches by `source`);
+- it serves **every** row source through one route. `srv/lib/delivery.js` holds one table entry
+  per source (who may read, which link type, how to fetch, the revocation rule), so no handler
+  branches on `source`;
 - revocation reaches outstanding links **immediately**, which is the DB-backed token ADR 0001 and
   task 0004 asked for, for this route.
 
@@ -138,9 +140,10 @@ Customer
   `otcs` rows (HANA), so it is deferred.
 
 **Hardening (from the security review of this change)**
-- **Inline allowlist + `nosniff` on both anonymous routes.** Only PDF, common images and plain
-  text are served `inline`. Anything else (HTML, SVG, XML) is served as an `attachment`, and every
-  response carries `X-Content-Type-Options: nosniff`. An ArchiveLink repository can hold files
+- **Inline allowlist + `nosniff` on both anonymous routes, and in the CDN cache.** Only PDF,
+  common images and plain text are served `inline`. Anything else (HTML, SVG, XML) is served as
+  an `attachment`, in stream mode and on objects written to the S3 cache alike, and every
+  streamed response carries `X-Content-Type-Options: nosniff`. An ArchiveLink repository can hold files
   that ordinary S/4 users attached, and an inline `text/html` on this origin would be stored XSS
   via a public link. This changes `/invoice` for non-allowlisted types (e.g. `.docx` now downloads
   instead of being offered inline), which is what browsers did anyway. The v1 *token* is untouched.

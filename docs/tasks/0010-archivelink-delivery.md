@@ -41,10 +41,16 @@ short-lived link for them without uploading the bytes again. The BTP paths (`Ing
 - [x] BTP: destination `OpenText_OTAC` = `http://otac-dev:8082` (OnPremise, NoAuthentication)
 - [ ] Basis: Cloud Connector mapping `otac-dev:8082` → `OTEMO.grupopuntacana.com:8082`
       (HTTP; open for discovery now, restrict to `/archive` + sub-paths afterwards)
-- [ ] Generate the signing key pair; OpenText admin registers + enables the certificate on
-      `C1`, **read-only** ([runbook](../setup/archivelink-otac.md))
+- [x] Generate the DEV signing key pair (`CN=BTP_DOCDELIVERY_DEV`, kept in git-ignored `certs/`)
+- [ ] OpenText admin registers + enables the certificate on `C1`, **read-only**
+      ([runbook](../setup/archivelink-otac.md)); then the probe's step 4 returns the PDF
 - [ ] Key into the Credential Store (`ArchiveLinkSigningKey`), certificate into `secrets.mtaext`
-- [ ] S/4: OAuth client for BTP (SM59 + OA2C); put its `azp` in `ARCHIVELINK_REPOSITORIES`
+- [ ] S/4: IAS client + SM59 destinations; put its `azp` in `ARCHIVELINK_REPOSITORIES`
+      ([usage draft](../CONSUMING.md#s4-archivelink-documents))
+- [x] `DELIVERY_BASE_URL` declared in `mta.yaml` as the service's own route (it was only set by
+      hand with `cf set-env`)
+- [x] Demo portal router: anonymous `/doc/*` route to the service (`xs-app.json`), like `/invoice/*`
+- [ ] S/4 team reviews and runs the ABAP sketch
 
 ## References
 

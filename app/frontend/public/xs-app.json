@@ -22,6 +22,13 @@
       "csrfProtection": false
     },
     {
+      "source": "^/doc/(.*)$",
+      "target": "/doc/$1",
+      "destination": "srv-api",
+      "authenticationType": "none",
+      "csrfProtection": false
+    },
+    {
       "source": "^/assets/(.*)$",
       "target": "/assets/$1",
       "service": "app-front",
