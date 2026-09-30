@@ -55,7 +55,7 @@ function oid(dotted) {
   return der(0x06, Buffer.from(bytes));
 }
 
-/** Read one TLV at `offset`. @returns {{tag:number, start:number, end:number, next:number}} */
+/** Read one TLV at `offset`; `end` is also where the next sibling starts. */
 function readTlv(buf, offset) {
   const tag = buf[offset];
   let len = buf[offset + 1];
@@ -66,9 +66,7 @@ function readTlv(buf, offset) {
     for (let i = 0; i < n; i += 1) len = len * 256 + buf[start + i];
     start += n;
   }
-  return {
-    tag, start, end: start + len, next: start + len,
-  };
+  return { tag, start, end: start + len };
 }
 
 /**
@@ -82,15 +80,15 @@ function issuerAndSerial(certDer) {
   let serialOffset = tbs.start;
   let serial = readTlv(certDer, serialOffset);
   if (serial.tag === 0xa0) { // optional [0] version (absent on v1 certificates)
-    serialOffset = serial.next;
+    serialOffset = serial.end;
     serial = readTlv(certDer, serialOffset);
   }
   if (serial.tag !== 0x02) throw new Error('certificate: serialNumber not found');
-  const sigAlg = readTlv(certDer, serial.next);
-  const issuer = readTlv(certDer, sigAlg.next);
+  const sigAlg = readTlv(certDer, serial.end);
+  const issuer = readTlv(certDer, sigAlg.end);
   if (issuer.tag !== 0x30) throw new Error('certificate: issuer not found');
   return Buffer.concat([
-    certDer.subarray(sigAlg.next, issuer.end),
+    certDer.subarray(sigAlg.end, issuer.end),
     certDer.subarray(serialOffset, serial.end),
   ]);
 }
@@ -104,33 +102,48 @@ const OID = {
 };
 
 /**
- * PKCS#7 SignedData (detached, one signer, no attributes, no certificates) over `message`.
- * @param {Buffer} message
- * @param {{keyPem:string, certPem:string, digest?:('sha1'|'sha256')}} signer
- * @returns {Buffer} DER
+ * Parse and validate the signing material ONCE. Everything a signature needs that does not
+ * depend on the message — the key object, the certificate's issuer+serial, the algorithm
+ * identifiers — is computed here, so signing a request is one `crypto.sign` plus a few concats.
+ * @param {{keyPem:string, certPem:string, authId:string, digest?:('sha1'|'sha256')}} material
  */
-function signDetached(message, { keyPem, certPem, digest = 'sha1' }) {
+function createSigner({
+  keyPem, certPem, authId, digest = 'sha1',
+}) {
   const key = crypto.createPrivateKey(keyPem);
   const type = key.asymmetricKeyType;
   if (type !== 'rsa' && type !== 'dsa') throw new Error(`unsupported signing key type: ${type}`);
   if (!DIGEST_OID[digest]) throw new Error(`unsupported digest: ${digest}`);
+  if (!authId) throw new Error('authId is required');
+  return {
+    authId,
+    digest,
+    key,
+    signerId: seq(issuerAndSerial(new crypto.X509Certificate(certPem).raw)),
+    digestAlg: seq(oid(DIGEST_OID[digest]), NULL),
+    signatureAlg: type === 'rsa' ? seq(oid(OID.rsaEncryption), NULL) : seq(oid(OID.dsa)),
+  };
+}
 
-  const certDer = new crypto.X509Certificate(certPem).raw;
-  const digestAlg = seq(oid(DIGEST_OID[digest]), NULL);
+/**
+ * PKCS#7 SignedData (detached, one signer, no attributes, no certificates) over `message`.
+ * @param {Buffer} message
+ * @param {ReturnType<typeof createSigner>} signer
+ * @returns {Buffer} DER
+ */
+function signDetached(message, signer) {
   // RSA: PKCS#1 v1.5 over DigestInfo; DSA: a DER Dss-Sig-Value — both what crypto.sign emits.
-  const signature = crypto.sign(digest, message, key);
-  const signatureAlg = type === 'rsa' ? seq(oid(OID.rsaEncryption), NULL) : seq(oid(OID.dsa));
-
+  const signature = crypto.sign(signer.digest, message, signer.key);
   const signerInfo = seq(
     INT_1,
-    seq(issuerAndSerial(certDer)),
-    digestAlg,
-    signatureAlg,
+    signer.signerId,
+    signer.digestAlg,
+    signer.signatureAlg,
     octets(signature),
   );
   const signedData = seq(
     INT_1,
-    set(digestAlg),
+    set(signer.digestAlg),
     seq(oid(OID.data)), // detached: contentInfo carries the type only, no content
     set(signerInfo),
   );
@@ -142,17 +155,20 @@ function expirationStamp(date) {
   return date.toISOString().replace(/[-:T]/g, '').slice(0, 14);
 }
 
+// A signed URL only has to outlive one request through the tunnel.
+const SIGNATURE_TTL_SECONDS = 300;
+
 /**
  * The four signature parameters for a read of one document.
  * @param {{contRep:string, docId:string}} doc
- * @param {{keyPem:string, certPem:string, authId:string, digest?:string, ttlSeconds?:number,
- *   now?:Date}} signer
+ * @param {ReturnType<typeof createSigner>} signer
+ * @param {Date} [now]
  * @returns {{accessMode:string, authId:string, expiration:string, secKey:string}}
  */
-function readParams({ contRep, docId }, signer) {
+function readParams({ contRep, docId }, signer, now = new Date()) {
   const accessMode = 'r';
-  const { authId, ttlSeconds = 300, now = new Date() } = signer;
-  const expiration = expirationStamp(new Date(now.getTime() + ttlSeconds * 1000));
+  const { authId } = signer;
+  const expiration = expirationStamp(new Date(now.getTime() + SIGNATURE_TTL_SECONDS * 1000));
   const message = Buffer.from(`${contRep}${docId}${accessMode}${authId}${expiration}`, 'latin1');
   return {
     accessMode, authId, expiration, secKey: signDetached(message, signer).toString('base64'),
@@ -160,8 +176,9 @@ function readParams({ contRep, docId }, signer) {
 }
 
 module.exports = {
+  createSigner,
   readParams,
-  // exported for unit tests / the probe script
+  // exported for unit tests
   signDetached,
   issuerAndSerial,
   expirationStamp,

@@ -148,8 +148,7 @@ async function publish(nodeId) {
  * @param {string} args.key         S3 object key
  * @param {string} args.label       log label, e.g. `node=2000` / `archive=C1/0AFF…`
  * @param {object} args.metadata    extra S3 user metadata identifying the source object
- * @param {() => Promise<{buffer:Buffer, contentType:string, fileName:string,
- *   disposition?:string}>} args.load  `disposition` overrides the default inline header
+ * @param {() => Promise<{buffer:Buffer, contentType:string, fileName:string}>} args.load
  * @param {string} [args.sourceOfTruth] recorded on the object; defaults to `opentext`
  * @returns {Promise<string>} a short-lived CloudFront signed URL
  */
@@ -162,16 +161,14 @@ async function publishObject({
     LOG.info(`cache miss for ${label} — fetching from ${sourceOfTruth}`);
     const { PutObjectCommand } = deps.loadS3Sdk();
     const s3 = await getS3();
-    const {
-      buffer, contentType, fileName, disposition,
-    } = await load();
+    const { buffer, contentType, fileName } = await load();
     await s3.send(
       new PutObjectCommand({
         Bucket: s3Bucket(),
         Key: key,
         Body: buffer,
         ContentType: contentType,
-        ContentDisposition: disposition || `inline; filename="${fileName}"`,
+        ContentDisposition: opentext.contentDisposition(contentType, fileName),
         Metadata: {
           ...metadata,
           // S3 user metadata must be US-ASCII; encode so a non-ASCII name (résumé.pdf) is safe.

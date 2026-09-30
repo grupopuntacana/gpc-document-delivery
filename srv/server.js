@@ -14,17 +14,6 @@ const LOG = cds.log('invoice');
 const DELIVERY_MODE = process.env.OPENTEXT_DELIVERY_MODE === 'cdn' ? 'cdn' : 'stream';
 
 /**
- * Anonymous customer-facing document routes — the load-bearing piece, ported from
- * demo/server.py `open_invoice`, and generalized by ADR 0009.
- *
- *   GET /invoice/:token  v1 token (stateless, nodeId) — OpenText nodes only
- *   GET /doc/:token      v2 token (docId, DB-resolved) — any Documents row source
- *
- * The token is the credential, so these routes are intentionally unauthenticated (they sit
- * outside CAP's @requires services). Each verifies its token, then serves the bytes (Option A)
- * or 302s to a short-lived CloudFront signed URL (Option B).
- */
-/**
  * Serve one document — shared by both anonymous routes. `row` is source-typed (ADR 0009):
  * `{source:'otcs', nodeId}` or `{source:'archivelink', contRep, archDocId, ...}`.
  */
@@ -63,6 +52,31 @@ async function serve(row, res, t0) {
   }
 }
 
+/**
+ * Verify a token; on an invalid one answer 403 and return null. Anything else rethrows.
+ */
+async function verified(res, resolve, InvalidError) {
+  try {
+    return await resolve();
+  } catch (err) {
+    if (!(err instanceof InvalidError)) throw err;
+    LOG.warn(`invalid token: ${err.message}`);
+    res.status(403).send(`invalid token: ${err.message}`);
+    return null;
+  }
+}
+
+/**
+ * Anonymous customer-facing document routes — the load-bearing piece, ported from
+ * demo/server.py `open_invoice`, and generalized by ADR 0009.
+ *
+ *   GET /invoice/:token  v1 token (stateless, nodeId) — OpenText nodes only
+ *   GET /doc/:token      v2 token (docId, DB-resolved) — any Documents row source
+ *
+ * The token is the credential, so these routes are intentionally unauthenticated (they sit
+ * outside CAP's @requires services). Each verifies its token, then serves the bytes (Option A)
+ * or 302s to a short-lived CloudFront signed URL (Option B).
+ */
 cds.on('bootstrap', (app) => {
   /**
    * v1 — `/invoice/:token`, the stateless HMAC token over an OpenText nodeId. Byte-compatible
@@ -70,16 +84,8 @@ cds.on('bootstrap', (app) => {
    */
   app.get('/invoice/:token', async (req, res) => {
     const t0 = process.hrtime.bigint();
-    let payload;
-    try {
-      payload = await resolveToken(req.params.token);
-    } catch (err) {
-      if (err instanceof InvalidToken) {
-        LOG.warn(`invalid token: ${err.message}`);
-        return res.status(403).send(`invalid token: ${err.message}`);
-      }
-      throw err;
-    }
+    const payload = await verified(res, () => resolveToken(req.params.token), InvalidToken);
+    if (!payload) return undefined;
     return serve({ source: 'otcs', nodeId: payload.nodeId }, res, t0);
   });
 
@@ -90,35 +96,18 @@ cds.on('bootstrap', (app) => {
    */
   app.get('/doc/:token', async (req, res) => {
     const t0 = process.hrtime.bigint();
-    let docId;
-    try {
-      ({ docId } = await resolveDocToken(req.params.token));
-    } catch (err) {
-      if (err instanceof InvalidDocToken) {
-        LOG.warn(`invalid doc token: ${err.message}`);
-        return res.status(403).send(`invalid token: ${err.message}`);
-      }
-      throw err;
-    }
+    const payload = await verified(res, () => resolveDocToken(req.params.token), InvalidDocToken);
+    if (!payload) return undefined;
     let row;
-    let revoked;
     try {
-      const { Documents } = cds.entities('gpc.documentdelivery');
-      row = await SELECT.one.from(Documents).where({ docId });
-      revoked = !row || row.revoked;
-      // ArchiveLink revocation is per archived document: a racing duplicate row for the same
-      // locator must not outlive the revoked one (ADR 0009).
-      if (row && !revoked && row.source === 'archivelink') {
-        revoked = !!(await SELECT.one.from(Documents).columns('docId')
-          .where({ contRep: row.contRep, archDocId: row.archDocId, revoked: true }));
-      }
+      row = await delivery.resolveDeliverable(payload.docId);
     } catch (err) {
       LOG.error(`doc lookup failed: ${err.message}`);
       return res.status(500).type('text/plain').send('lookup failed');
     }
     // A validly-signed token whose row is gone or revoked: same opaque answer for both.
-    if (revoked) {
-      LOG.warn(`doc token for a ${row ? 'revoked' : 'missing'} document`);
+    if (!row) {
+      LOG.warn('doc token for a missing or revoked document');
       return res.status(404).type('text/plain').send('not found');
     }
     return serve(row, res, t0);

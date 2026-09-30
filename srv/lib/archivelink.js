@@ -30,8 +30,6 @@
 
 const crypto = require('crypto');
 const fs = require('fs');
-const http = require('http');
-const https = require('https');
 
 const LOG = require('@sap/cds').log('archivelink');
 const credstore = require('./credstore');
@@ -47,17 +45,16 @@ const ARCHIVE_PATH = '/archive';
 // 0045 is the protocol version every ArchiveLink-certified server supports.
 const PROTOCOL_VERSION = '0045';
 
-// Fresh socket per call, same reason as opentext.js: the Cloud Connector proxy pins a
-// keep-alive socket to the first on-premise host it served.
-const agents = {
-  httpAgent: new http.Agent({ keepAlive: false }),
-  httpsAgent: new https.Agent({ keepAlive: false }),
-};
+// Own agent pair, same reason as opentext.js: the Cloud Connector proxy pins a keep-alive
+// socket to the first on-premise host it served, so a pool is never shared across hosts.
+const agents = opentext.makeAgents();
 
-// A signed URL only has to outlive one request through the tunnel.
-const SIGNATURE_TTL_SECONDS = 300;
-
+// Signer memo, same expiry-stamped promise pattern as the CloudFront key: a burst shares one
+// Credential Store read, a rotated key is picked up within the TTL, and a rejection is dropped
+// so the next call retries. Set ARCHIVELINK_SIGNER_TTL_MS=0 to disable (tests).
+const SIGNER_TTL_MS = Number(process.env.ARCHIVELINK_SIGNER_TTL_MS ?? 10 * 60 * 1000);
 let _signerPromise = null;
+let _signerExpires = 0;
 
 /** The configured certificate (PEM), or null when signing is off. */
 function signingCert() {
@@ -69,12 +66,13 @@ function signingCert() {
 }
 
 /**
- * Resolve (once) the signer, or null when no certificate is configured. The promise is cached
- * so a burst shares one Credential Store read; a rejection is dropped so the next call retries.
- * @returns {Promise<?{keyPem:string, certPem:string, authId:string, digest:string}>}
+ * The parsed signer (`seckey.createSigner`), or null when no certificate is configured.
+ * @returns {Promise<?ReturnType<typeof seckey.createSigner>>}
  */
 function getSigner() {
-  if (_signerPromise) return _signerPromise;
+  const now = Date.now();
+  if (_signerPromise && now < _signerExpires) return _signerPromise;
+  _signerExpires = now + SIGNER_TTL_MS;
   _signerPromise = (async () => {
     const certPem = signingCert();
     if (!certPem) return null;
@@ -82,14 +80,16 @@ function getSigner() {
     // `subject` is "CN=name" lines; the archive registers a certificate under an authId that
     // conventionally is its subject (S/4 uses `CN=<SID>`).
     const cn = /CN=([^\n,]+)/.exec(new crypto.X509Certificate(certPem).subject);
-    const authId = process.env.ARCHIVELINK_AUTH_ID || (cn ? `CN=${cn[1].trim()}` : '');
-    if (!authId) throw new Error('ARCHIVELINK_AUTH_ID is required: the certificate has no CN');
-    return {
-      keyPem, certPem, authId, digest: process.env.ARCHIVELINK_SIGNING_DIGEST || 'sha1',
-    };
+    return seckey.createSigner({
+      keyPem,
+      certPem,
+      authId: process.env.ARCHIVELINK_AUTH_ID || (cn ? `CN=${cn[1].trim()}` : ''),
+      digest: process.env.ARCHIVELINK_SIGNING_DIGEST || 'sha1',
+    });
   })();
   _signerPromise.catch(() => {
     _signerPromise = null;
+    _signerExpires = 0;
   });
   return _signerPromise;
 }
@@ -97,6 +97,7 @@ function getSigner() {
 /** Drop the memoized signer (tests / a key rotation without a restart). */
 function clearSignerCache() {
   _signerPromise = null;
+  _signerExpires = 0;
 }
 
 /**
@@ -112,10 +113,7 @@ function getUrl(contRep, archDocId, compId, signer = null) {
     `compId=${encodeURIComponent(compId)}`,
   ];
   if (signer) {
-    const sig = seckey.readParams(
-      { contRep, docId: archDocId },
-      { ...signer, ttlSeconds: SIGNATURE_TTL_SECONDS },
-    );
+    const sig = seckey.readParams({ contRep, docId: archDocId }, signer);
     q.push(...Object.entries(sig).map(([k, v]) => `${k}=${encodeURIComponent(v)}`));
   }
   return `${ARCHIVE_PATH}?${q.join('&')}`;
@@ -140,8 +138,8 @@ async function downloadDocument({
     { fetchCsrfToken: false },
   );
   const headers = res.headers || {};
-  // ArchiveLink document class (TOA01 RESERVE) is PDF for print lists; the server echoes the
-  // component's MIME type. Recover it from nothing only as a last resort.
+  // The server echoes the component's MIME type (PDF for print lists). There is no filename to
+  // recover a type from, so a missing header falls back to application/octet-stream.
   const contentType = opentext.resolveContentType(headers['content-type'], null);
   LOG.debug(`fetched ${contRep}/${archDocId} bytes=${res.data?.length ?? 0} type=${contentType}`);
   return { buffer: Buffer.from(res.data), contentType };

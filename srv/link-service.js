@@ -4,6 +4,7 @@ const cds = require('@sap/cds');
 
 const archives = require('./lib/archives');
 const buckets = require('./lib/buckets');
+const delivery = require('./lib/delivery');
 const opentext = require('./lib/opentext');
 const token = require('./lib/token');
 const { makeDocToken } = require('./lib/doctoken');
@@ -96,19 +97,11 @@ async function mintDocLink(docId, requestedTtlDays) {
   return { deliveryUrl: `${DELIVERY_BASE_URL}/doc/${tok}`, expiresAt };
 }
 
-/**
- * May `azp` mint a link for this row? Read scope depends on where the row lives: a bucket for
- * OpenText nodes (ADR 0008), a content repository for ArchiveLink documents (ADR 0009).
- */
-function mayReadRow(azp, row) {
-  if (row.source === 'archivelink') return archives.mayRead(azp, row.contRep);
-  return buckets.mayRead(azp, row.bucket);
-}
-
-/** Mint the right link for the row's source. OpenText rows keep the v1 `/invoice` link. */
+/** Mint the link the row's source is served by. OpenText rows keep the v1 `/invoice` link. */
 function mintForRow(row, requestedTtlDays) {
-  if (row.source === 'archivelink') return mintDocLink(row.docId, requestedTtlDays);
-  return mintLink(row.nodeId, requestedTtlDays);
+  return delivery.linkKind(row) === 'doc'
+    ? mintDocLink(row.docId, requestedTtlDays)
+    : mintLink(row.nodeId, requestedTtlDays);
 }
 
 // ArchiveLink business-link fields S/4 may declare (TOA01 widths). Optional, audit-only.
@@ -155,14 +148,13 @@ module.exports = class LinkService extends cds.ApplicationService {
       if (typeof docId !== 'string' || !docId.trim()) return req.reject(404, 'not found');
 
       const row = await SELECT.one.from(Documents).where({ docId });
-      if (!row || row.revoked || !mayReadRow(azp, row)) {
+      if (!row || row.revoked || !delivery.mayRead(azp, row)) {
         LOG.warn(`linkFor denied for azp "${azp}" (docId not found, not a reader, or revoked)`);
         return req.reject(404, 'not found');
       }
 
       const { deliveryUrl, expiresAt } = await mintForRow(row, req.data.ttlDays);
-      const scope = row.source === 'archivelink' ? `repository "${row.contRep}"` : `bucket "${row.bucket}"`;
-      LOG.info(`linkFor minted for docId ${docId} (azp "${azp}", ${scope})`);
+      LOG.info(`linkFor minted for docId ${docId} (azp "${azp}", ${delivery.scope(row)})`);
       return { deliveryUrl, expiresAt };
     });
 
@@ -207,7 +199,7 @@ module.exports = class LinkService extends cds.ApplicationService {
 
       // Revocation is per archived document, not per row: two concurrent first claims can race
       // into two rows, so ANY revoked row for this locator blocks the mint (ADR 0009).
-      const rows = await SELECT.from(Documents)
+      const rows = await SELECT.from(Documents).columns('docId', 'revoked')
         .where({ source: 'archivelink', contRep, archDocId });
       const existing = rows.find((r) => !r.revoked);
       if (rows.some((r) => r.revoked)) {

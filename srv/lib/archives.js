@@ -34,6 +34,8 @@
  * the boot. `mayRead` is total and fails closed.
  */
 
+const { parseAcl } = require('./buckets');
+
 const REPOS_ENV = 'ARCHIVELINK_REPOSITORIES';
 
 const DEFAULT_DESTINATION = process.env.ARCHIVELINK_DESTINATION || 'OpenText_OTAC';
@@ -53,25 +55,6 @@ function configError(message) {
   const err = new Error(message);
   err.code = 'ARCHIVE_CONFIG_INVALID';
   return err;
-}
-
-function readersSet(repo, configured) {
-  if (configured === undefined) return new Set();
-  if (!Array.isArray(configured)) {
-    throw configError(
-      `${REPOS_ENV}: repository "${repo}" has an invalid allowedReaders `
-        + `(must be an array of azp strings): ${JSON.stringify(configured)}`,
-    );
-  }
-  return new Set(configured.map((azp) => {
-    const trimmed = typeof azp === 'string' ? azp.trim() : '';
-    if (!trimmed) {
-      throw configError(
-        `${REPOS_ENV}: repository "${repo}" has an invalid allowedReaders entry: ${JSON.stringify(azp)}`,
-      );
-    }
-    return trimmed;
-  }));
 }
 
 function optionalToken(repo, field, configured, re, fallback) {
@@ -112,7 +95,12 @@ function registry() {
       throw configError(`${REPOS_ENV}: repository "${repo}" must be an object`);
     }
     return [repo, {
-      allowedReaders: readersSet(repo, entry.allowedReaders),
+      allowedReaders: parseAcl(
+        `${REPOS_ENV}: repository "${repo}"`,
+        'allowedReaders',
+        entry.allowedReaders,
+        configError,
+      ),
       destination: optionalToken(repo, 'destination', entry.destination, DESTINATION_RE, DEFAULT_DESTINATION),
       compId: optionalToken(repo, 'compId', entry.compId, COMP_ID_RE, DEFAULT_COMP_ID),
     }];
@@ -165,5 +153,4 @@ module.exports = {
   resolveRepository,
   isValidLocator,
   clearRegistryCache,
-  REPOS_ENV,
 };

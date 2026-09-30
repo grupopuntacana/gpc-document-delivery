@@ -45,11 +45,11 @@ const opentext = require('../srv/lib/opentext');
 
 const say = (...a) => console.log(...a); // eslint-disable-line no-console
 
-async function call(query, responseType = 'text') {
+async function call(url, responseType = 'text') {
   try {
     const res = await executeHttpRequest(
       { destinationName: DEST },
-      { method: 'GET', url: `${archivelink.ARCHIVE_PATH}?${query}`, responseType },
+      { method: 'GET', url, responseType },
       { fetchCsrfToken: false },
     );
     return { status: res.status, data: res.data, headers: res.headers || {} };
@@ -76,8 +76,7 @@ function describeCert(hex) {
 }
 
 async function tryGet(label, signer) {
-  const url = archivelink.getUrl(CONTREP, ARCH_DOC_ID, 'data', signer).slice(archivelink.ARCHIVE_PATH.length + 1);
-  const res = await call(url, 'arraybuffer');
+  const res = await call(archivelink.getUrl(CONTREP, ARCH_DOC_ID, 'data', signer), 'arraybuffer');
   if (res.status === 200) {
     const buf = Buffer.from(res.data);
     say(`   ${label}: 200 · ${buf.length} bytes · ${res.headers['content-type']}`);
@@ -95,7 +94,7 @@ async function tryGet(label, signer) {
   say(`destination ${DEST}${process.env.ARCHIVE_URL ? ` → ${process.env.ARCHIVE_URL} (direct)` : ' (bound)'}`);
 
   say('\n1. serverInfo');
-  const info = await call(`serverInfo&pVersion=${archivelink.PROTOCOL_VERSION}&contRep=${CONTREP}&resultAs=ascii`);
+  const info = await call(`${archivelink.ARCHIVE_PATH}?serverInfo&pVersion=${archivelink.PROTOCOL_VERSION}&contRep=${CONTREP}&resultAs=ascii`);
   if (info.status !== 200) {
     say(`   ${info.status} · ${info.error}`);
     say('   → the server is not reachable through this destination; fix connectivity first.');
@@ -104,7 +103,7 @@ async function tryGet(label, signer) {
   say(`   ${String(info.data).trim().replace(/\r?\n/g, '\n   ')}`);
 
   say('\n2. getCert (certificates the repository trusts)');
-  const certs = await call(`getCert&pVersion=0046&contRep=${CONTREP}`);
+  const certs = await call(`${archivelink.ARCHIVE_PATH}?getCert&pVersion=0046&contRep=${CONTREP}`);
   if (certs.status === 200) {
     const text = String(certs.data);
     const hexes = [...text.matchAll(/certificate="([0-9A-Fa-f]+)"/g)].map((m) => m[1]);

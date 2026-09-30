@@ -166,6 +166,20 @@ describe('cdn (S3 write-through cache)', () => {
     expect(put.input.ContentDisposition).toBe('inline; filename="résumé.pdf"');
   });
 
+  it('cache MISS: a non-allowlisted type (HTML) is cached as an attachment, never inline', async () => {
+    cdn.deps.loadS3Sdk = () => fakeSdk(sent, notFound);
+    await cdn.publishObject({
+      key: 'archivelink/C1/ABC',
+      label: 'archive=C1/ABC',
+      metadata: {},
+      sourceOfTruth: 'archivelink',
+      load: async () => ({ buffer: Buffer.from('<html>'), contentType: 'text/html', fileName: 'x.html' }),
+    });
+    const put = sent.find((c) => c.type === 'put');
+    expect(put.input.ContentDisposition).toBe('attachment; filename="x.html"');
+    expect(put.input.Metadata['source-of-truth']).toBe('archivelink');
+  });
+
   it('cache HIT: skips download + PutObject, still returns a signed URL', async () => {
     cdn.deps.loadS3Sdk = () => fakeSdk(sent, () => ({ ContentLength: 123 }));
 

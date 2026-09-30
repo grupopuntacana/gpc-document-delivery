@@ -186,46 +186,37 @@ function clearSecretCache() {
 }
 
 /**
- * The CloudFront signing private key (PEM).
- * @returns {Promise<string>} PEM-encoded RSA private key.
+ * Read a PEM private key: Credential Store `key` entry `entryName` when bound, else the
+ * `<envName>` / `<envName>_PATH` env fallback for local/hybrid/test runs.
  */
-async function getCloudFrontPrivateKey() {
+async function getPemKey(entryName, envName, label) {
   const creds = binding();
   if (creds) {
-    const entry = await fetchEntry(creds, 'key', 'CloudFrontPrivateKey');
+    const entry = await fetchEntry(creds, 'key', entryName);
     // Credential Store 'key' entries carry the material in `value` (base64) — normalize to PEM.
     const raw = Buffer.from(entry.value, 'base64').toString('utf8');
     return raw.includes('-----BEGIN') ? raw : entry.value;
   }
-  if (process.env.CLOUDFRONT_PRIVATE_KEY) return process.env.CLOUDFRONT_PRIVATE_KEY;
-  if (process.env.CLOUDFRONT_PRIVATE_KEY_PATH) {
-    return fs.readFileSync(process.env.CLOUDFRONT_PRIVATE_KEY_PATH, 'utf8');
-  }
-  throw new Error(
-    'CloudFront private key unavailable: no credstore binding and no CLOUDFRONT_PRIVATE_KEY[_PATH].',
-  );
+  if (process.env[envName]) return process.env[envName];
+  if (process.env[`${envName}_PATH`]) return fs.readFileSync(process.env[`${envName}_PATH`], 'utf8');
+  throw new Error(`${label} unavailable: no credstore binding and no ${envName}[_PATH].`);
 }
 
 /**
- * The ArchiveLink `secKey` signing private key (PEM) — ADR 0009. Credential Store `key` entry
- * `ArchiveLinkSigningKey`, else `ARCHIVELINK_SIGNING_KEY` / `_PATH` locally. The matching
- * certificate is public and lives in plain config (`ARCHIVELINK_SIGNING_CERT`).
+ * The CloudFront signing private key (PEM).
+ * @returns {Promise<string>} PEM-encoded RSA private key.
+ */
+function getCloudFrontPrivateKey() {
+  return getPemKey('CloudFrontPrivateKey', 'CLOUDFRONT_PRIVATE_KEY', 'CloudFront private key');
+}
+
+/**
+ * The ArchiveLink `secKey` signing private key (PEM) — ADR 0009. The matching certificate is
+ * public and lives in plain config (`ARCHIVELINK_SIGNING_CERT`).
  * @returns {Promise<string>} PEM-encoded RSA or DSA private key.
  */
-async function getArchiveLinkSigningKey() {
-  const creds = binding();
-  if (creds) {
-    const entry = await fetchEntry(creds, 'key', 'ArchiveLinkSigningKey');
-    const raw = Buffer.from(entry.value, 'base64').toString('utf8');
-    return raw.includes('-----BEGIN') ? raw : entry.value;
-  }
-  if (process.env.ARCHIVELINK_SIGNING_KEY) return process.env.ARCHIVELINK_SIGNING_KEY;
-  if (process.env.ARCHIVELINK_SIGNING_KEY_PATH) {
-    return fs.readFileSync(process.env.ARCHIVELINK_SIGNING_KEY_PATH, 'utf8');
-  }
-  throw new Error(
-    'ArchiveLink signing key unavailable: no credstore binding and no ARCHIVELINK_SIGNING_KEY[_PATH].',
-  );
+function getArchiveLinkSigningKey() {
+  return getPemKey('ArchiveLinkSigningKey', 'ARCHIVELINK_SIGNING_KEY', 'ArchiveLink signing key');
 }
 
 // In-memory single-flight cache for the AWS S3 credentials. Like the HMAC secret these

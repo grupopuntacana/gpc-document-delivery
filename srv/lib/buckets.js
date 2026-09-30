@@ -96,34 +96,42 @@ function nodeId(bucket, field, configured) {
 }
 
 /**
- * Validate one of a bucket's ACLs (`allowedWriters` or `allowedReaders`) into a Set of azp
- * values. Absent or `[]` is legal config and leaves that ACL empty — never open.
+ * Validate one ACL (`allowedWriters` / `allowedReaders`) into a Set of azp values. Absent or
+ * `[]` is legal config and leaves that ACL empty — never open. Shared with the ArchiveLink
+ * repository registry (archives.js), which has the same rules.
  *
  * A non-array or a blank entry is a config error rather than a lenient read: an ACL an
  * operator believes grants access but doesn't is the failure this guards against.
  *
- * @param {string} bucket bucket name (for the error message)
+ * @param {string} owner what the ACL belongs to, for the message, e.g.
+ *   `OPENTEXT_BUCKETS: bucket "x"`
  * @param {string} field the ACL field name — 'allowedWriters' | 'allowedReaders'
  * @param {*} configured the raw value from the parsed config
+ * @param {(message:string) => Error} makeError builds the registry's config error
  */
-function aclSet(bucket, field, configured) {
+function parseAcl(owner, field, configured, makeError) {
   if (configured === undefined) return new Set();
   if (!Array.isArray(configured)) {
-    throw configError(
-      `${BUCKETS_ENV}: bucket "${bucket}" has an invalid ${field} `
+    throw makeError(
+      `${owner} has an invalid ${field} `
         + `(must be an array of azp strings): ${JSON.stringify(configured)}`,
     );
   }
   return new Set(configured.map((azp) => {
     const trimmed = typeof azp === 'string' ? azp.trim() : '';
     if (!trimmed) {
-      throw configError(
-        `${BUCKETS_ENV}: bucket "${bucket}" has an invalid ${field} entry: ${JSON.stringify(azp)}`,
-      );
+      throw makeError(`${owner} has an invalid ${field} entry: ${JSON.stringify(azp)}`);
     }
     return trimmed;
   }));
 }
+
+const aclSet = (bucket, field, configured) => parseAcl(
+  `${BUCKETS_ENV}: bucket "${bucket}"`,
+  field,
+  configured,
+  configError,
+);
 
 /**
  * Parse + validate `OPENTEXT_BUCKETS` once. Validation is eager over every entry so a
@@ -293,5 +301,6 @@ module.exports = {
   resolveBucket,
   mayWrite,
   mayRead,
+  parseAcl,
   clearRegistryCache,
 };

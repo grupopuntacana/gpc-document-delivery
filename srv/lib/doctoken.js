@@ -27,9 +27,19 @@ const KEY_LABEL = 'gpc-document-delivery/doc-token/v2';
 
 class InvalidDocToken extends Error {}
 
+// The derived key, memoized against the secret it came from: a rotated SHARED_LINK_SECRET
+// (credstore's own TTL cache returns the new value) yields a new key on the next call.
+let _derived = { secret: null, key: null };
+
 async function signingKey() {
-  const secret = Buffer.from(await credstore.getSharedLinkSecret(), 'utf8');
-  return crypto.createHmac('sha256', secret).update(KEY_LABEL).digest();
+  const secret = await credstore.getSharedLinkSecret();
+  if (_derived.secret !== secret) {
+    _derived = {
+      secret,
+      key: crypto.createHmac('sha256', Buffer.from(secret, 'utf8')).update(KEY_LABEL).digest(),
+    };
+  }
+  return _derived.key;
 }
 
 /** Compact, sorted-keys JSON — deterministic, same canonical form as token.js. */
@@ -91,6 +101,4 @@ module.exports = {
   InvalidDocToken,
   makeDocToken,
   resolveDocToken,
-  // exported for unit tests
-  canonicalPayload,
 };

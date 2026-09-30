@@ -178,9 +178,8 @@ describe('secKey signing (signed Content Server URLs)', () => {
       });
     try {
       const now = new Date('2026-09-30T13:00:00Z');
-      const out = seckey.readParams({ contRep: 'C1', docId: BILL_A }, {
-        keyPem, certPem: 'ignored', authId: 'CN=TEST_SIGNER', ttlSeconds: 300, now,
-      });
+      const signer = seckey.createSigner({ keyPem, certPem: 'ignored', authId: 'CN=TEST_SIGNER' });
+      const out = seckey.readParams({ contRep: 'C1', docId: BILL_A }, signer, now);
       expect(out).toMatchObject({ accessMode: 'r', authId: 'CN=TEST_SIGNER', expiration: '20260930130500' });
       const p7 = Buffer.from(out.secKey, 'base64');
       expect(p7[0]).toBe(0x30); // DER SEQUENCE (ContentInfo)
@@ -211,6 +210,16 @@ describe('secKey signing (signed Content Server URLs)', () => {
     const url = archivelink.getUrl('C1', BILL_A, 'data', { keyPem: 'k', certPem: 'c', authId: 'CN=X' });
     expect(url).toContain('&accessMode=r&authId=CN%3DX&expiration=20260930130500&secKey=a%2Bb%2Fc%3D');
     spy.mockRestore();
+  });
+
+  it('createSigner rejects an unsupported key type or digest up front', () => {
+    const ec = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' }).privateKey
+      .export({ type: 'pkcs8', format: 'pem' });
+    expect(() => seckey.createSigner({ keyPem: ec, certPem: 'x', authId: 'CN=X' }))
+      .toThrow(/unsupported signing key type/);
+    expect(() => seckey.createSigner({
+      keyPem, certPem: 'x', authId: 'CN=X', digest: 'md5',
+    })).toThrow(/unsupported digest/);
   });
 
   it('signing is off (null signer) when no certificate is configured', async () => {
