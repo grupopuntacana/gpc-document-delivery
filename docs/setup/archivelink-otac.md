@@ -21,12 +21,14 @@ trusts RSA certificates, so we use an ordinary RSA key pair.
 
 ## 1. Generate the key pair
 
-Outside the repo (the key is a secret; never commit it):
+Generate it into `certs/`, which is git-ignored (the key is a secret; never commit it). Name the
+files by landscape tier so DEV, QAS and PRD keys can't be mixed up:
 
 ```bash
+mkdir -p certs
 openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 3650 \
   -subj "/CN=BTP_DOCDELIVERY_DEV" \
-  -keyout archivelink-signing.key -out archivelink-signing.crt
+  -keyout certs/archivelink-signing-dev.key -out certs/archivelink-signing-dev.crt
 ```
 
 The certificate's `CN` becomes the `authId` (`CN=BTP_DOCDELIVERY_DEV`). Use one key pair per
@@ -34,7 +36,7 @@ landscape tier (DEV / QAS / PRD). To override the `authId`, set `ARCHIVELINK_AUT
 
 ## 2. Register the certificate on the repository
 
-Send `archivelink-signing.crt` (public, safe to email) to the OpenText admin and ask them to:
+Send `certs/archivelink-signing-dev.crt` (public, safe to email) to the OpenText admin and ask them to:
 
 1. Import it for logical archive **C1** with authId **`CN=BTP_DOCDELIVERY_DEV`**.
 2. Grant **read only** (`r`). document-delivery never creates, updates or deletes.
@@ -46,8 +48,8 @@ Send `archivelink-signing.crt` (public, safe to email) to the OpenText admin and
 # in-office, direct
 ARCHIVE_URL=http://OTEMO.grupopuntacana.com:8082 \
 ARCH_DOC_ID=<a TOA01 ARC_DOC_ID> \
-ARCHIVELINK_SIGNING_CERT_PATH=/path/archivelink-signing.crt \
-ARCHIVELINK_SIGNING_KEY_PATH=/path/archivelink-signing.key \
+ARCHIVELINK_SIGNING_CERT_PATH=certs/archivelink-signing-dev.crt \
+ARCHIVELINK_SIGNING_KEY_PATH=certs/archivelink-signing-dev.key \
 OUT=/tmp/bill.pdf node scripts/probe-archivelink.js
 
 # through the Cloud Connector (after Basis creates the mapping): same env, without ARCHIVE_URL
@@ -64,7 +66,7 @@ npx cds bind --exec --profile hybrid -- node scripts/probe-archivelink.js
 ## 4. Deploy
 
 ```bash
-node scripts/credstore-put.js key ArchiveLinkSigningKey "$(cat /path/archivelink-signing.key)"
+node scripts/credstore-put.js key ArchiveLinkSigningKey "$(cat certs/archivelink-signing-dev.key)"
 ```
 
 and in `secrets.mtaext` set `ARCHIVELINK_SIGNING_CERT` to the certificate PEM and
