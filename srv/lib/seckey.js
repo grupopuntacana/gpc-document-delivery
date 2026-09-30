@@ -10,9 +10,9 @@
  *   accessMode=r & authId=<signer> & expiration=<UTC yyyymmddhhmmss> & secKey=<signature>
  *
  * where `secKey` is a base64 **PKCS#7 SignedData, detached**, over the concatenation (no
- * separators) of the signed parameter VALUES — for `get` / `info`:
+ * separators) of the signed parameter values, URL-encoded as they are sent — for `get` / `info`:
  *
- *   contRep + docId + accessMode + authId + expiration
+ *   contRep + docId + accessMode + authId + expiration      e.g. `C1<docId>rCN%3DBTP_X<stamp>`
  *
  * and the server verifies it against a certificate registered on the repository under `authId`.
  * C1's registered certificates (`getCert`) include RSA ones, so an ordinary RSA key works; DSA
@@ -173,7 +173,13 @@ function readParams({ contRep, docId }, signer, now = new Date()) {
   const accessMode = 'r';
   const { authId } = signer;
   const expiration = expirationStamp(new Date(now.getTime() + SIGNATURE_TTL_SECONDS * 1000));
-  const message = Buffer.from(`${contRep}${docId}${accessMode}${authId}${expiration}`, 'latin1');
+  // The server verifies against the values AS THEY APPEAR IN THE URL, i.e. still URL-encoded
+  // (found against Archive Center 25.4: signing the plain `CN=X` fails with ICS:3009, signing
+  // `CN%3DX` succeeds). Encode here exactly as archivelink.getUrl does.
+  const message = Buffer.from(
+    [contRep, docId, accessMode, authId, expiration].map(encodeURIComponent).join(''),
+    'latin1',
+  );
   return {
     accessMode, authId, expiration, secKey: signDetached(message, signer).toString('base64'),
   };

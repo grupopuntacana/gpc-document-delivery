@@ -32,6 +32,8 @@ HTTP protocol, `GET /archive?<command>&pVersion=…&contRep=C1…`.
 | `getCert` (`pVersion=0046`; 0045 → `500 ICS:5014`) | 200 | Three certificates registered: `CN=DS4` (DSA 1024, `rcud`), `CN=SP_OTION` (RSA 1024, `rcudp`), `CN=otemo` (RSA 1024, `rcud`). RSA is accepted. |
 | `get` / `info`, unsigned | 401 | `ICS:3003: The URL is not signed or signature is invalid, parameter secKey` — **signed URLs are mandatory** |
 | `get`, signed with an unregistered RSA certificate | 401 | `ICS:3001: The referenced certificate having been issued by 'CN=…' with serial:0x… is unknown` — the server parsed our PKCS#7 `secKey` and identified the signer; only the registration is missing |
+| `get`, signed, certificate registered, **plain** `authId` in the signed message | 401 | `ICS:3009: The signature C1…rCN%3D…<stamp> is invalid` — the server verifies against the parameter values **as sent in the URL** (still URL-encoded), so `CN=X` must be signed as `CN%3DX` |
+| `get`, signed, certificate registered, URL-encoded `authId` in the signed message | 200 | `application/pdf`, 424,502 bytes — the archived bill. PKCS#7 detached, RSA, SHA-1, no signed attributes, no embedded certificate. `openssl smime` output with attributes and the certificate is accepted too. |
 
 Conclusion: the fetcher needs `secKey` signing (`srv/lib/seckey.js`) and our certificate
 registered on `C1`. Runbook: [setup/archivelink-otac.md](setup/archivelink-otac.md).

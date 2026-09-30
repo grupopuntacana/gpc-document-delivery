@@ -21,7 +21,8 @@
  *   1 serverInfo   reachable? which product/version? is the repository running?
  *   2 getCert      which certificates the repository trusts, their key type and permissions
  *   3 unsigned get 200 → no signing needed; 401 ICS:3003 → the repository requires secKey
- *   4 signed get   200 → our certificate is registered and enabled; 401 → not yet (or wrong authId)
+ *   4 signed get   200 → our certificate is registered and enabled; 401 ICS:3001 → not yet;
+ *                  401 ICS:3009 → certificate known, signature rejected
  */
 
 const crypto = require('crypto');
@@ -87,7 +88,7 @@ async function tryGet(label, signer) {
   } else {
     say(`   ${label}: ${res.status} · ${res.error}`);
   }
-  return res.status;
+  return res;
 }
 
 (async () => {
@@ -122,8 +123,8 @@ async function tryGet(label, signer) {
 
   say('\n3. unsigned get');
   const unsigned = await tryGet('unsigned', null);
-  if (unsigned === 200) say('   → the repository does NOT require signed URLs.');
-  if (unsigned === 401) say('   → the repository requires signed URLs (secKey).');
+  if (unsigned.status === 200) say('   → the repository does NOT require signed URLs.');
+  if (unsigned.status === 401) say('   → the repository requires signed URLs (secKey).');
 
   say('\n4. signed get');
   const signer = await archivelink.getSigner().catch((e) => {
@@ -136,7 +137,10 @@ async function tryGet(label, signer) {
   }
   say(`   authId ${signer.authId} · digest ${signer.digest}`);
   const signed = await tryGet('signed', signer);
-  if (signed === 401) {
+  if (signed.status === 401 && /ICS:3001/.test(signed.error)) {
     say('   → the certificate is not registered/enabled on the repository under this authId yet.');
+  } else if (signed.status === 401) {
+    say('   → the certificate is known but the signature was rejected (wrong key for this');
+    say('     certificate, clock skew, or a URL rewritten between here and the server).');
   }
 })();

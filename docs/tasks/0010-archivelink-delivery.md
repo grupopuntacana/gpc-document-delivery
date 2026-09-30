@@ -1,6 +1,6 @@
 # 0010 — S/4 ArchiveLink delivery (`linkForArchive` + `/doc/:token`)
 
-**Status:** in-progress (code shipped; blocked on the Cloud Connector mapping and the certificate registration on `C1`)
+**Status:** in-progress (signed reads from `C1` work in-office; blocked on the Cloud Connector mapping and the S/4 caller setup)
 **Architecture:** [ADR 0009](../adr/0009-archivelink-source-typed-documents.md)
 **Issue:** [#16](https://github.com/grupopuntacana/gpc-document-delivery/issues/16)
 
@@ -42,8 +42,10 @@ short-lived link for them without uploading the bytes again. The BTP paths (`Ing
 - [ ] Basis: Cloud Connector mapping `otac-dev:8082` → `OTEMO.grupopuntacana.com:8082`
       (HTTP; open for discovery now, restrict to `/archive` + sub-paths afterwards)
 - [x] Generate the DEV signing key pair (`CN=BTP_DOCDELIVERY_DEV`, kept in git-ignored `certs/`)
-- [ ] OpenText admin registers + enables the certificate on `C1`, **read-only**
-      ([runbook](../setup/archivelink-otac.md)); then the probe's step 4 returns the PDF
+- [x] OpenText admin registered + enabled the DEV certificate on `C1`
+- [x] Direct (in-office) signed read returns the PDF (`scripts/probe-archivelink.js`, step 4).
+      Finding: the signed message must carry `authId` URL-encoded, as sent
+- [ ] Same probe through the Cloud Connector (`cds bind --exec`), once Basis adds the mapping
 - [ ] Key into the Credential Store (`ArchiveLinkSigningKey`), certificate into `secrets.mtaext`
 - [ ] S/4: IAS client + SM59 destinations; put its `azp` in `ARCHIVELINK_REPOSITORIES`
       ([usage draft](../CONSUMING.md#s4-archivelink-documents))

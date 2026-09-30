@@ -60,7 +60,8 @@ npx cds bind --exec --profile hybrid -- node scripts/probe-archivelink.js
 |---|---|
 | `200 · N bytes · application/pdf` | Done. |
 | `401 · ICS:3001 … certificate … is unknown` | The signature is well-formed, but the certificate isn't registered or enabled on `C1` yet. |
-| `401 · ICS:3003 … secKey` | No signer configured, or the signature was rejected (wrong `authId`, expired clock). |
+| `401 · ICS:3009 … signature … is invalid` | The certificate is known but the signature doesn't verify: the key doesn't match the registered certificate, the clock is off, or something between us and the server rewrote the URL (the signature covers the values exactly as sent). |
+| `401 · ICS:3003 … secKey` | No signer configured: set the certificate and key paths. |
 | Step 1 fails | Connectivity: destination or Cloud Connector mapping. |
 
 ## 4. Deploy

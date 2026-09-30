@@ -183,7 +183,7 @@ describe('secKey signing (signed Content Server URLs)', () => {
     expect(seckey.expirationStamp(new Date('2026-09-30T13:05:09Z'))).toBe('20260930130509');
   });
 
-  it('signs contRep+docId+accessMode+authId+expiration, verifiable with the public key', () => {
+  it('signs contRep+docId+accessMode+authId+expiration (URL-encoded), verifiable with the public key', () => {
     const issuerAndSerial = vi.spyOn(crypto, 'X509Certificate')
       .mockImplementation(function Fake() {
         this.raw = FAKE_CERT_DER;
@@ -199,8 +199,11 @@ describe('secKey signing (signed Content Server URLs)', () => {
       expect(p7.includes(Buffer.from('06092a864886f70d010702', 'hex'))).toBe(true);
       // the SignerInfo names the certificate by its exact issuer + serial bytes
       expect(p7.includes(FAKE_ISSUER_AND_SERIAL)).toBe(true);
-      const message = Buffer.from(`C1${BILL_A}rCN=TEST_SIGNER20260930130500`);
+      // The message carries authId URL-encoded, as it is sent (what Archive Center verifies).
+      const message = Buffer.from(`C1${BILL_A}rCN%3DTEST_SIGNER20260930130500`);
       expect(crypto.verify('sha1', message, publicKey, signatureOf(p7, 256))).toBe(true);
+      const plain = Buffer.from(`C1${BILL_A}rCN=TEST_SIGNER20260930130500`);
+      expect(crypto.verify('sha1', plain, publicKey, signatureOf(p7, 256))).toBe(false);
     } finally {
       issuerAndSerial.mockRestore();
     }
