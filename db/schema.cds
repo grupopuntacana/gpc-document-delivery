@@ -12,16 +12,34 @@ namespace gpc.documentdelivery;
  * queryable entity), so the `nodeId` cannot leak through OData. Callers only ever hold the
  * opaque `docId`; the `nodeId` never leaves the service.
  *
+ * A row is SOURCE-TYPED (ADR 0009): `source = 'otcs'` rows locate the bytes by OpenText `nodeId`
+ * inside a `bucket` (the BTP / @gpc/attachments-opentext paths); `source = 'archivelink'` rows
+ * locate them by the S/4 ArchiveLink pair `(contRep, archDocId)`, claimed by S/4 through
+ * `LinkService.linkForArchive`. The `docId`, ownership and revocation work the same for both.
+ *
  * SQLite locally / in tests, HANA on BTP (`cds.requires.db`).
  */
 entity Documents {
       // The opaque 128-bit claim-check the consumer stores in place of the nodeId.
   key docId     : String;
+      // Where the bytes live: 'otcs' (nodeId + bucket) or 'archivelink' (contRep + archDocId).
+      // Existing rows predate the column and are all OpenText nodes, hence the default.
+      source    : String(16) not null  default 'otcs';
       // The private OpenText node id — NEVER in a request or response body. Int64 to match
-      // the ingest contract (opaque id, never truncate).
-      nodeId    : Int64      not null;
+      // the ingest contract (opaque id, never truncate). Set only on 'otcs' rows.
+      nodeId    : Int64      null;
       // The bucket (namespace) the document lives in; the app-caller read scope (`mayRead`).
-      bucket    : String     not null;
+      // Set only on 'otcs' rows — an 'archivelink' row is scoped by its `contRep` instead.
+      bucket    : String     null;
+      // ArchiveLink locator (TOA01 ARCHIV_ID / ARC_DOC_ID) — set only on 'archivelink' rows.
+      // `contRep` is also the read scope (`archives.mayRead`).
+      contRep   : String(2)  null;
+      archDocId : String(40) null;
+      // ArchiveLink business link as S/4 declared it (TOA01 SAP_OBJECT / OBJECT_ID / AR_OBJECT).
+      // Audit + a friendly download name only; never an authorization input.
+      sapObject : String(10) null;
+      objectId  : String(50) null;
+      docType   : String(10) null;
       // The app azp that owns the row, derived from its IAS token at ingest/claim (DoD-2).
       ownerAzp  : String     not null;
       // Reserved for the customer dimension (task 0009, pending redesign per ADR 0008 — customer

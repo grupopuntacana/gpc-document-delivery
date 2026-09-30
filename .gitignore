@@ -13,3 +13,11 @@ secrets.mtaext
 dist/
 .DS_Store
 *.log
+
+# Signing material (ArchiveLink secKey, CloudFront). Private keys must never be committed;
+# keep them in certs/ locally and in the Credential Store on BTP.
+certs/
+*.key
+*.pem
+*.p12
+*.pfx

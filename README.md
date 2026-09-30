@@ -95,6 +95,13 @@ The OTDS credentials are read off the `OpenText_OTDS` destination and placed in 
 request body. Override the destination names with `OPENTEXT_OTDS_DESTINATION` /
 `OPENTEXT_OTCS_DESTINATION` if needed.
 
+S/4 ArchiveLink delivery (ADR 0009) needs a third destination, to the archive server S/4
+archives into. Full steps, including the signing certificate: [docs/setup/archivelink-otac.md](docs/setup/archivelink-otac.md).
+
+| Name | URL | Auth |
+|---|---|---|
+| `OpenText_OTAC` | `http://otac-dev:8082` (Cloud Connector virtual host) | NoAuthentication — requests are signed instead |
+
 ### Credential Store
 Namespace defaults to `gpc-document-delivery` (override with `CREDSTORE_NAMESPACE`).
 
@@ -114,6 +121,8 @@ node scripts/credstore-put.js key      CloudFrontPrivateKey  "$(cat ../python/op
 # Option B (cdn mode) also needs the S3 credentials:
 node scripts/credstore-put.js password AWS_ACCESS_KEY_ID     '<aws-access-key-id>'
 node scripts/credstore-put.js password AWS_SECRET_ACCESS_KEY '<aws-secret-access-key>'
+# S/4 ArchiveLink delivery also needs the key that signs reads from the archive:
+node scripts/credstore-put.js key      ArchiveLinkSigningKey "$(cat certs/archivelink-signing-dev.key)"
 
 # 3. Cleanup once done — the service key carries live binding creds
 cf delete-service-key credstore-shared cli
@@ -322,7 +331,7 @@ or deployed — same as the Python demo needs live OpenText.
 
 `LinkService` (`srv/link-service.{cds,js}`, `@path: link`) turns a durable handle into a fresh,
 short-lived `/invoice/{token}` delivery link ([ADR 0006](docs/adr/0006-delivery-link-authorization.md)
-/ [0008](docs/adr/0008-bucket-scoped-cross-app-reads.md)). All three actions are
+/ [0008](docs/adr/0008-bucket-scoped-cross-app-reads.md)). All its actions are
 `@requires: 'authenticated-user'` (service-to-service IAS auth); the anonymous leg is the
 separate `/invoice/{token}` route. No entity is exposed — the store stays un-queryable, and a
 raw `nodeId` is never accepted or returned.
@@ -341,9 +350,38 @@ raw `nodeId` is never accepted or returned.
 `ttlDays` is optional; omitted, the token defaults to `LINKFOR_TOKEN_TTL_HOURS` (24h), never the
 30-day `makeToken` default — the delivery credential is short-lived (re-mint on demand).
 
-**Adopting this from another app?** Follow [docs/CONSUMING.md](docs/CONSUMING.md): IAS identity,
-the `DOCUMENT_SERVICE` destination, requesting a bucket, the proxy model, and calling
-`register` / `linkFor`.
+### S/4 ArchiveLink documents (`linkForArchive`, `GET /doc/:token`)
+
+Documents S/4 archived through ArchiveLink get links too, without being uploaded to BTP
+([ADR 0009](docs/adr/0009-archivelink-source-typed-documents.md)).
+
+- **`linkForArchive(contRep, archDocId, sapObject?, objectId?, docType?, ttlDays?) →
+  { docId, deliveryUrl, expiresAt }`** — the caller passes the ArchiveLink reference it holds
+  (link-table `ARCHIV_ID` + `ARC_DOC_ID`). It must be listed in `allowedReaders` for that
+  repository in `ARCHIVELINK_REPOSITORIES`. The `Documents` row is created on first use with
+  `source = 'archivelink'`; `linkFor(docId)` works on it afterwards.
+- **`GET /doc/:token`** — the anonymous route for these links. Its token names the `docId` and
+  is checked against the row on every request, so revoking a document stops its links at once.
+  `/invoice/:token` is unchanged and still serves OpenText nodes.
+- The bytes are read from the archive server over the SAP Content Server HTTP protocol, through
+  the `OpenText_OTAC` destination, with each request signed (`srv/lib/seckey.js`).
+
+| Variable | Meaning |
+|---|---|
+| `ARCHIVELINK_REPOSITORIES` | `{"C1":{"allowedReaders":["<azp>"],"destination"?,"compId"?}}` — who may mint links per repository. Set it in `secrets.mtaext`. |
+| `ARCHIVELINK_DESTINATION` | Default destination for repositories that don't name one (`OpenText_OTAC`). |
+| `ARCHIVELINK_SIGNING_CERT` / `_PATH` | The certificate registered on the repository. Signing is on when this is set. |
+| `ARCHIVELINK_SIGNING_KEY` / `_PATH` | Its private key, for local runs. On BTP it is the Credential Store key `ArchiveLinkSigningKey`. |
+| `ARCHIVELINK_AUTH_ID` | The ID the certificate is registered under. Default `CN=<certificate CN>`. |
+| `DOC_LINK_MAX_TTL_DAYS` | Upper bound for a `/doc` link's lifetime (90). |
+| `DELIVERY_BASE_URL` | Base of the links handed to other systems: this service's own route. Set in `mta.yaml` (`${default-url}`). Unset, links come back as a path only. The demo portal doesn't use it; it builds relative links that its router forwards to the service. |
+
+To check connectivity to the archive without deploying, run `scripts/probe-archivelink.js`
+(see the [runbook](docs/setup/archivelink-otac.md#3-verify-with-the-probe)).
+
+**Adopting this from another system?** Follow [docs/CONSUMING.md](docs/CONSUMING.md). It covers
+CAP apps on BTP (IAS identity, the `DOCUMENT_SERVICE` destination, requesting a bucket, the
+proxy model, `register` / `linkFor`) and S/4 (`linkForArchive`, with an ABAP sketch).
 
 ## Portal UI (`app/frontend`)
 
@@ -413,6 +451,9 @@ code for future diagnosis.
 | `portal` | info | `documents: N from folder F` | a listing returned N docs |
 | `portal` | debug | `documents timing: listMs=… tokenMs=… totalMs=…` | `listMs`=OpenText round trips, `tokenMs`=secret fetch + HMAC (≈0 once the secret cache is warm) |
 | `opentext` | debug | `withTicket: authMs=… callMs=…` | `authMs`=OTDS auth (≈0 when the ticket cache is warm), `callMs`=the OTCS call itself |
+| `link` | info / warn | `linkForArchive minted …` / `… denied for azp "…" …` | a link was minted, or why it was refused (the caller only sees 404) |
+| `invoice` | info / error | `served archive=C1/… …` / `fetch failed archive=C1/… : …` | a `/doc` delivery, or the upstream reason for a 502 (the caller only sees a generic message) |
+| `archivelink` | debug | `fetched C1/… bytes=… type=…` | one read from the archive server |
 
 Reading the timing: a warm request should show `authMs=0 tokenMs=0`; whatever remains is
 `callMs` (OpenText server-side + tunnel latency). If `authMs` or `tokenMs` is non-zero on a

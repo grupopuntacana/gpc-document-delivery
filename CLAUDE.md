@@ -57,6 +57,11 @@ Request paths:
 - **`GET /invoice/:token`** (`srv/server.js`) — anonymous; the token *is* the credential, so
   it sits outside CAP's `@requires` services and is registered on `cds.on('bootstrap')`.
   Verifies the token, then streams the PDF (Option A) or 302-redirects to CloudFront (Option B).
+- **`LinkService.linkForArchive`** + **`GET /doc/:token`** (ADR 0009) — S/4-native delivery:
+  S/4 passes its ArchiveLink locator `(contRep, archDocId)`, gets a `/doc` link backed by a
+  source-typed `Documents` row. `/doc` uses the v2 token (`srv/lib/doctoken.js`, key-separated,
+  DB-resolved); `/invoice` and its v1 token are unchanged. `srv/lib/delivery.js` dispatches by
+  row `source` (`otcs` | `archivelink`); `archives.js` holds the repository grants.
 - **`SelfTestService`** (`srv/delivery-service.{cds,js}`) — `checkSecret` / `pingOpenText`
   diagnostic actions that return status only, never secret material.
 

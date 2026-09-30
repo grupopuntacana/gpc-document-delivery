@@ -315,6 +315,21 @@ const TYPE_BY_EXT = {
   json: 'application/json',
 };
 
+// Types safe to render INLINE on this service's own origin. Anything else (HTML, SVG, XML, …) is
+// served as an attachment: a store can hold files ordinary users attached, and an inline
+// text/html from our origin would be stored XSS via a public link.
+const INLINE_TYPES = new Set([
+  'application/pdf', 'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/tiff', 'image/bmp',
+  'text/plain',
+]);
+
+/** `inline` for allowlisted types, `attachment` otherwise, with a header-safe filename. */
+function contentDisposition(contentType, fileName) {
+  const base = String(contentType || '').split(';')[0].trim().toLowerCase();
+  const mode = INLINE_TYPES.has(base) ? 'inline' : 'attachment';
+  return `${mode}; filename="${sanitizeFileName(fileName)}"`;
+}
+
 /** The lowercased extension of a filename, or '' if none. */
 function extensionOf(fileName) {
   const dot = fileName ? fileName.lastIndexOf('.') : -1;
@@ -624,6 +639,7 @@ function describeError(err) {
 }
 
 module.exports = {
+  makeAgents,
   pingNode,
   listFolder,
   listFolderChildNames,
@@ -639,6 +655,7 @@ module.exports = {
   resolveContentType,
   filenameFromDisposition,
   sanitizeFileName,
+  contentDisposition,
   getNodeName,
   categorize,
   describeError,

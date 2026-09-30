@@ -33,6 +33,15 @@ modules:
       # Until it is set, the SPA's upload returns 403. Real per-app ACLs belong in the
       # extension descriptor (secrets.mtaext), not `cf set-env` (which a redeploy reverts).
       OPENTEXT_BUCKETS: '{"invoices":{"folderNode":5816,"allowedWriters":["REPLACE-WITH-FRONTEND-AZP"]}}'
+      # ARCHIVELINK_REPOSITORIES — S/4 ArchiveLink content repositories (ADR 0009): which azps
+      # may mint /doc links via linkForArchive. Empty = the S/4 path grants nothing. Real
+      # values (S/4's IAS client azp) belong in secrets.mtaext, like OPENTEXT_BUCKETS.
+      ARCHIVELINK_REPOSITORIES: '{}'
+      # Base of the links linkFor / linkForArchive hand to OTHER systems: this service's own
+      # route, which answers /invoice/<token> and /doc/<token> anonymously. Declared here (not
+      # `cf set-env`) so a redeploy keeps it. The demo portal does not use it: it builds
+      # relative /invoice/<token> links that its own router forwards here.
+      DELIVERY_BASE_URL: ${default-url}
       OPENTEXT_DELIVERY_MODE: "cdn"
       AWS_REGION: "us-east-1"
       S3_BUCKET: "opentext-cdn-cache-gpc"

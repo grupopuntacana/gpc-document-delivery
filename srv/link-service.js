@@ -2,9 +2,12 @@
 
 const cds = require('@sap/cds');
 
+const archives = require('./lib/archives');
 const buckets = require('./lib/buckets');
+const delivery = require('./lib/delivery');
 const opentext = require('./lib/opentext');
 const token = require('./lib/token');
+const { makeDocToken } = require('./lib/doctoken');
 const { newDocId } = require('./lib/docref');
 
 const LOG = cds.log('link');
@@ -31,6 +34,10 @@ const deps = {
 // makeToken default. A caller that needs a link to persist (emailed, ticketed) passes an
 // explicit `ttlDays`; one that needs it shorter does the same.
 const LINKFOR_TOKEN_TTL_HOURS = Number(process.env.LINKFOR_TOKEN_TTL_HOURS || 24);
+
+// Upper bound for a v2 `/doc` link (ADR 0009). A caller may ask for a long-lived link (an emailed
+// bill), but never an effectively-permanent one.
+const DOC_LINK_MAX_TTL_DAYS = Number(process.env.DOC_LINK_MAX_TTL_DAYS || 90);
 
 // Where the anonymous deliver route lives (srv/server.js `GET /invoice/:token`). Absolute when
 // DELIVERY_BASE_URL is set (the deployed srv route); otherwise a root-relative path, which is
@@ -76,6 +83,45 @@ async function mintLink(nodeId, requestedTtlDays) {
   return { deliveryUrl, expiresAt };
 }
 
+/**
+ * Mint a v2 `/doc/{token}` link over a `docId` (ADR 0009). Used for every row source that the
+ * v1 `/invoice` token cannot carry (today: ArchiveLink). The token names only the docId; the
+ * route resolves the row, so revocation reaches outstanding links immediately.
+ * @returns {Promise<{deliveryUrl: string, expiresAt: Date}>}
+ */
+async function mintDocLink(docId, requestedTtlDays) {
+  // v2 links are capped; the v1 /invoice mint keeps its historical (uncapped) behavior.
+  const ttlDays = Math.min(effectiveTtlDays(requestedTtlDays), DOC_LINK_MAX_TTL_DAYS);
+  const ttlSeconds = Math.trunc(ttlDays * 86400);
+  const { token: tok, expiresAt } = await makeDocToken(docId, { ttlSeconds });
+  return { deliveryUrl: `${DELIVERY_BASE_URL}/doc/${tok}`, expiresAt };
+}
+
+/** Mint the link the row's source is served by. OpenText rows keep the v1 `/invoice` link. */
+function mintForRow(row, requestedTtlDays) {
+  return delivery.linkKind(row) === 'doc'
+    ? mintDocLink(row.docId, requestedTtlDays)
+    : mintLink(row.nodeId, requestedTtlDays);
+}
+
+// ArchiveLink business-link fields S/4 may declare (TOA01 widths). Optional, audit-only.
+const ARCHIVE_META = { sapObject: 10, objectId: 50, docType: 10 };
+
+/**
+ * Normalize the optional ArchiveLink metadata. Returns `null` (→ 400) when a supplied value is
+ * not a string or exceeds its TOA01 width — never silently truncated into the audit row.
+ */
+function archiveMeta(data) {
+  const entries = Object.entries(ARCHIVE_META).map(([field, max]) => {
+    const v = data[field];
+    if (v == null || v === '') return [field, null];
+    if (typeof v !== 'string' || !v.trim() || v.trim().length > max) return [field, undefined];
+    return [field, v.trim()];
+  });
+  if (entries.some(([, v]) => v === undefined)) return null;
+  return Object.fromEntries(entries);
+}
+
 module.exports = class LinkService extends cds.ApplicationService {
   init() {
     // The ownership/revocation store (db/schema.cds) — reached by its db name, never projected
@@ -102,14 +148,94 @@ module.exports = class LinkService extends cds.ApplicationService {
       if (typeof docId !== 'string' || !docId.trim()) return req.reject(404, 'not found');
 
       const row = await SELECT.one.from(Documents).where({ docId });
-      if (!row || row.revoked || !buckets.mayRead(azp, row.bucket)) {
+      let allowed = false;
+      if (row && !row.revoked) {
+        try {
+          allowed = delivery.mayRead(azp, row);
+        } catch (err) {
+          // A malformed bucket / repository registry (or a row with an unknown source) is our
+          // fault, not the caller's: log the reason and answer 500, as linkForArchive does.
+          LOG.error('linkFor: read-scope registry is misconfigured:', err.message);
+          return req.reject(500, 'registry is misconfigured');
+        }
+      }
+      if (!allowed) {
         LOG.warn(`linkFor denied for azp "${azp}" (docId not found, not a reader, or revoked)`);
         return req.reject(404, 'not found');
       }
 
-      const { deliveryUrl, expiresAt } = await mintLink(row.nodeId, req.data.ttlDays);
-      LOG.info(`linkFor minted for docId ${docId} (azp "${azp}", bucket "${row.bucket}")`);
+      const { deliveryUrl, expiresAt } = await mintForRow(row, req.data.ttlDays);
+      LOG.info(`linkFor minted for docId ${docId} (azp "${azp}", ${delivery.scope(row)})`);
       return { deliveryUrl, expiresAt };
+    });
+
+    /**
+     * linkForArchive(contRep, archDocId, …) — S/4-native delivery (ADR 0009). S/4 already holds
+     * the ArchiveLink (TOA01 `ARCHIV_ID` + `ARC_DOC_ID`) for a document it archived; it calls
+     * this, authenticated as its own IAS/OAuth client, to get a short-lived public link.
+     *
+     * The ArchiveLink id is a LOCATOR, not a credential — SAP GUIDs are time/host based, so a
+     * caller holding one proves nothing. The gate is the caller's `azp` against the repository's
+     * `allowedReaders` (archives.js), the same fail-closed, 404-on-deny shape as a bucket.
+     *
+     * The row is upserted lazily, keyed by `(contRep, archDocId)` — one row per archived
+     * document, so a reprint (a new ARC_DOC_ID for the same print document) is a new row, and
+     * revoking a row stops both future mints and outstanding `/doc` links. The returned `docId`
+     * lets a caller re-mint later through the ordinary `linkFor(docId)`.
+     */
+    this.on('linkForArchive', async (req) => {
+      const azp = callerAzp(req.user);
+      if (!azp) return req.reject(403, 'caller token carries no azp claim');
+
+      const { contRep, archDocId } = req.data;
+      // Shape validation is not an oracle (it says nothing about what exists), so a malformed
+      // locator is an honest 400; everything past this point collapses to 404.
+      if (!archives.isValidLocator(contRep, archDocId)) {
+        return req.reject(400, 'contRep must be 2 chars [A-Z0-9] and archDocId 1-40 chars [A-Za-z0-9]');
+      }
+      const meta = archiveMeta(req.data);
+      if (!meta) return req.reject(400, 'sapObject/objectId/docType must be strings within their ArchiveLink widths');
+
+      let allowed;
+      try {
+        allowed = archives.mayRead(azp, contRep);
+      } catch (err) {
+        LOG.error('ArchiveLink repository registry is misconfigured:', err.message);
+        return req.reject(500, 'archive registry is misconfigured');
+      }
+      if (!allowed) {
+        LOG.warn(`linkForArchive denied for azp "${azp}": not a reader of repository "${contRep}"`);
+        return req.reject(404, 'not found');
+      }
+
+      // Revocation is per archived document, not per row: two concurrent first claims can race
+      // into two rows, so ANY revoked row for this locator blocks the mint (ADR 0009).
+      const rows = await SELECT.from(Documents).columns('docId', 'revoked')
+        .where({ source: 'archivelink', contRep, archDocId });
+      const existing = rows.find((r) => !r.revoked);
+      if (rows.some((r) => r.revoked)) {
+        LOG.warn(`linkForArchive denied: ${contRep}/${archDocId} is revoked`);
+        return req.reject(404, 'not found');
+      }
+      let docId = existing && existing.docId;
+      if (!docId) {
+        docId = newDocId();
+        await INSERT.into(Documents).entries({
+          docId,
+          source: 'archivelink',
+          contRep,
+          archDocId,
+          ...meta,
+          ownerAzp: azp,
+          revoked: false,
+          createdAt: new Date().toISOString(),
+        });
+        LOG.info(`linkForArchive claimed ${contRep}/${archDocId} as docId ${docId} (azp "${azp}")`);
+      }
+
+      const { deliveryUrl, expiresAt } = await mintDocLink(docId, req.data.ttlDays);
+      LOG.info(`linkForArchive minted for docId ${docId} (azp "${azp}", repository "${contRep}")`);
+      return { docId, deliveryUrl, expiresAt };
     });
 
     /**
@@ -167,7 +293,7 @@ module.exports = class LinkService extends cds.ApplicationService {
       }
 
       // Lazy upsert: reuse an existing row (so revocation/audit are honored), else create one.
-      const existing = await SELECT.one.from(Documents).where({ nodeId, bucket });
+      const existing = await SELECT.one.from(Documents).where({ source: 'otcs', nodeId, bucket });
       if (existing && existing.revoked) {
         // A revoked node stays revoked — a re-claim must not resurrect a killed link.
         LOG.warn(`${label} denied: node ${nodeId} in bucket "${bucket}" is revoked`);
@@ -178,6 +304,7 @@ module.exports = class LinkService extends cds.ApplicationService {
         docId = newDocId();
         await INSERT.into(Documents).entries({
           docId,
+          source: 'otcs',
           nodeId,
           bucket,
           ownerAzp: azp,

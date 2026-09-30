@@ -20,4 +20,22 @@
 
 ---
 
+## ArchiveLink repository `C1` (OTAC)
+
+Probed 2026-09-30 with `scripts/probe-archivelink.js` against the server OAC0 names for `C1`
+(`OTEMO.grupopuntacana.com:8082`, script `archive`, protocol 0045, no HTTPS). SAP Content Server
+HTTP protocol, `GET /archive?<command>&pVersion=…&contRep=C1…`.
+
+| Command | Status | Finding |
+|---|---:|---|
+| `serverInfo` | 200 | OpenText Archive Center **25.4.0** (build 25.4.0.86), `C1` running, server speaks up to `pVersion` 0047, `serverSecurityMode="SEC_R3L2"` |
+| `getCert` (`pVersion=0046`; 0045 → `500 ICS:5014`) | 200 | Three certificates registered: `CN=DS4` (DSA 1024, `rcud`), `CN=SP_OTION` (RSA 1024, `rcudp`), `CN=otemo` (RSA 1024, `rcud`). RSA is accepted. |
+| `get` / `info`, unsigned | 401 | `ICS:3003: The URL is not signed or signature is invalid, parameter secKey` — **signed URLs are mandatory** |
+| `get`, signed with an unregistered RSA certificate | 401 | `ICS:3001: The referenced certificate having been issued by 'CN=…' with serial:0x… is unknown` — the server parsed our PKCS#7 `secKey` and identified the signer; only the registration is missing |
+
+Conclusion: the fetcher needs `secKey` signing (`srv/lib/seckey.js`) and our certificate
+registered on `C1`. Runbook: [setup/archivelink-otac.md](setup/archivelink-otac.md).
+
+---
+
 > **Origin:** Imported from the OpenText CDN Python prototype (`opentext-cdn-prototype`). This is the consolidated, self-contained copy — the prototype repo is archival. Benchmark/latency figures are from the prototype's May 2026 measurement run and have not been re-measured against the CAP implementation. See [docs/README.md → Origins & related work](README.md#origins-and-related-work) for the prototype's role.

@@ -168,6 +168,7 @@ module.exports = class IngestService extends cds.ApplicationService {
         const docId = newDocId();
         await INSERT.into(Documents).entries({
           docId,
+          source: 'otcs',
           nodeId,
           bucket,
           ownerAzp: auth.azp,

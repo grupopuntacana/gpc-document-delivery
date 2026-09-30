@@ -1,12 +1,21 @@
-# Consuming document-delivery from a CAP app
+# Consuming document-delivery
 
-This guide is for a CAP app that stores files in OpenText with
-[`@gpc/attachments-opentext`](https://github.com/grupopuntacana/attachments-opentext) and now
-needs to **share** them: a short-lived download link for a user or customer, or another app
-delivering a file this app uploaded. It covers both sides: what the consuming app sets up, and
-the one change document-delivery's maintainers make for it.
+How another system gets a short-lived, public download link for a document. There are two kinds
+of consumer, and each has its own part of this guide:
 
-Storage itself isn't covered here. Set it up first by following the plugin's
+| Your system | Where the document lives | You hold | You call | Read |
+|---|---|---|---|---|
+| **A CAP app on BTP** that stores files with [`@gpc/attachments-opentext`](https://github.com/grupopuntacana/attachments-opentext) | OpenText Content Server (OTCS) | the node ID the plugin returned | `register`, then `linkFor` | [How it works](#how-it-works) and steps 1–7 |
+| **A BTP app that only delivers** another app's documents | OTCS | a `docId` the uploading app gave you | `linkFor` | steps 1–5 and 7 |
+| **S/4** (or any system holding an ArchiveLink reference) | OpenText Archive Center (OTAC), archived by S/4 | `ARCHIV_ID` + `ARC_DOC_ID` from the link table | `linkForArchive` | [S/4 ArchiveLink documents](#s4-archivelink-documents) |
+
+All three get the same thing back: a link that works without login, expires, and can be revoked.
+The caller is always identified by the `azp` claim of its IAS token, never by anything in the
+request.
+
+The CAP-app part covers both sides: what the consuming app sets up, and the one change
+document-delivery's maintainers make for it. Storage itself isn't covered here. Set it up first
+by following the plugin's
 [INSTALL.md](https://github.com/grupopuntacana/attachments-opentext/blob/master/INSTALL.md).
 
 ## How it works
@@ -31,13 +40,14 @@ Another app (reader of "my-app-docs")
   5. linkFor("d-abc")   (docId received from your app)  ───►  same read check, fresh link
 ```
 
-The three actions of `LinkService` (`srv/link-service.cds`, OData v4 at `/odata/v4/link`):
+The actions of `LinkService` (`srv/link-service.cds`, OData v4 at `/odata/v4/link`):
 
 | Action | Who may call | Use it when |
 |---|---|---|
 | `register(bucket, nodeId) → { docId }` | a **writer** of `bucket` | You just stored a file and want a durable handle to keep and pass around. Mints no link. |
 | `linkFor(docId, ttlDays?) → { deliveryUrl, expiresAt }` | a **reader or writer** of the document's bucket | You need a link now. Call it every time; never store the link. |
 | `linkForNode(bucket, nodeId, ttlDays?) → { deliveryUrl, expiresAt }` | a **writer** of `bucket` | `register` + `linkFor` in one call, when you don't need to keep the `docId`. |
+| `linkForArchive(contRep, archDocId, …) → { docId, deliveryUrl, expiresAt }` | a **reader** of the content repository | The document was archived by S/4 through ArchiveLink. See [S/4 ArchiveLink documents](#s4-archivelink-documents). |
 
 `ttlDays` is optional. Leave it out to get document-delivery's short default
 (`LINKFOR_TOKEN_TTL_HOURS`, 24 hours).
@@ -305,3 +315,181 @@ generic message: a response can include node IDs.
 | Grant worked, then stopped after a redeploy of document-delivery | The bucket was set with `cf set-env`, not in `secrets.mtaext` (step 4). |
 | *"no auth tokens could be fetched"* in hybrid | A local `destinations` variable defines `DOCUMENT_SERVICE` (step 7). Remove it. |
 | `500 bucket registry is misconfigured` | `OPENTEXT_BUCKETS` in document-delivery is malformed. Maintainers' side. |
+
+## S/4 ArchiveLink documents
+
+> **Draft.** The service side is built and tested. The S/4 side below is a proposal for the S/4
+> team: the ABAP has not been run on the S/4 system yet, and a live end-to-end run is waiting on
+> the items in [task 0010](tasks/0010-archivelink-delivery.md).
+
+Documents S/4 archives through ArchiveLink (for example IS-U bills: object type `PRINTDOC`,
+document type `ISU_BILL`, content repository `C1`) can get a public link **without being
+uploaded to BTP**. S/4 already holds the reference in its link table and passes it to
+`linkForArchive`. Background: [ADR 0009](adr/0009-archivelink-source-typed-documents.md).
+
+```
+S/4                                                  document-delivery
+  1. bill is printed and archived → link table row
+     (C1, 0AFFC37A…C9FC, PRINTDOC 050000000006)
+  2. linkForArchive("C1", "0AFFC37A…C9FC", …)  ───►  checks: caller is a reader of repository C1
+                                               ◄───  { docId, deliveryUrl, expiresAt }
+  3. put deliveryUrl in the bill email / SMS
+
+Customer
+  4. opens deliveryUrl (no login)              ───►  fetches the PDF from the archive, serves it
+```
+
+### The call
+
+```
+POST https://<document-delivery-srv>/odata/v4/link/linkForArchive
+Authorization: Bearer <IAS token of the S/4 client>
+Content-Type: application/json
+
+{ "contRep": "C1",
+  "archDocId": "0AFFC37AE2C51FD1AE84A8F99394C9FC",
+  "sapObject": "PRINTDOC", "objectId": "050000000006", "docType": "ISU_BILL",
+  "ttlDays": 30 }
+```
+
+```
+200 { "docId": "Zk3…", "deliveryUrl": "https://<document-delivery-srv>/doc/<token>",
+      "expiresAt": "2026-10-30T13:00:00Z" }
+```
+
+| Field | Link-table column | Required | Notes |
+|---|---|---|---|
+| `contRep` | `ARCHIV_ID` | yes | 2 characters, e.g. `C1`. |
+| `archDocId` | `ARC_DOC_ID` | yes | Up to 40 characters. **Send this exact value, not the business key**: a reprint creates a new archived document for the same `OBJECT_ID`, and each one gets its own link. |
+| `sapObject` | `SAP_OBJECT` | no | Audit only. |
+| `objectId` | `OBJECT_ID` | no | Audit, and the download file name (`ISU_BILL-050000000006.pdf`). |
+| `docType` | `AR_OBJECT` | no | Audit and file name. |
+| `ttlDays` | | no | How long the link works. Default 1 day; maximum 90. For a bill email, 30 is a reasonable value. |
+
+Rules for the S/4 side:
+
+- **Don't store `deliveryUrl`.** It expires. Ask for a new one each time you send a message.
+  Calling again for the same document is cheap and returns the same `docId` with a fresh link.
+- **The three optional fields grant nothing.** Access is decided only by who is calling and
+  which repository is named.
+- **A link can be revoked** by document-delivery's maintainers (for example, a bill sent to the
+  wrong customer). It stops working immediately, and new requests for that document return 404.
+- **File types:** PDFs, images and plain text open in the browser. Anything else downloads.
+
+### ABAP sketch
+
+Two HTTP destinations in SM59 (type G), so no URL or secret lives in code:
+
+| Destination | Target | Logon |
+|---|---|---|
+| `DOCDELIVERY_IAS` | `https://<tenant>.accounts.ondemand.com`, path prefix `/oauth2/token` | Basic: user = S/4's IAS client ID, password = its client secret |
+| `DOCDELIVERY_SRV` | `https://<document-delivery-srv>`, path prefix `/odata/v4/link/linkForArchive` | none (the code adds the bearer token) |
+
+```abap
+" 1. Find the archived document(s) for a print document.
+DATA lt_conn TYPE STANDARD TABLE OF toav0.
+CALL FUNCTION 'ARCHIV_GET_CONNECTIONS'
+  EXPORTING
+    objecttype    = 'PRINTDOC'
+    object_id     = CONV saeobjid( lv_print_doc )      " e.g. 050000000006
+  TABLES
+    connections   = lt_conn
+  EXCEPTIONS
+    nothing_found = 1
+    OTHERS        = 2.
+IF sy-subrc <> 0.
+  RETURN.                                              " not archived (yet)
+ENDIF.
+" A reprint adds a row: take the newest ISU_BILL.
+DELETE lt_conn WHERE ar_object <> 'ISU_BILL'.
+SORT lt_conn BY ar_date DESCENDING.
+DATA(ls_conn) = lt_conn[ 1 ].
+
+" 2. Get an IAS token (client credentials).
+cl_http_client=>create_by_destination(
+  EXPORTING destination = 'DOCDELIVERY_IAS'
+  IMPORTING client      = DATA(lo_ias) ).
+lo_ias->request->set_method( 'POST' ).
+lo_ias->request->set_content_type( 'application/x-www-form-urlencoded' ).
+lo_ias->request->set_form_field( name = 'grant_type' value = 'client_credentials' ).
+" Needed only if calls fail with "401 token issued for different audience":
+" lo_ias->request->set_form_field( name  = 'resource'
+"   value = 'urn:sap:identity:application:provider:clientid:<document-delivery IAS client id>' ).
+lo_ias->send( ).
+lo_ias->receive( ).
+DATA: BEGIN OF ls_token, access_token TYPE string, END OF ls_token.
+/ui2/cl_json=>deserialize( EXPORTING json = lo_ias->response->get_cdata( )
+                           CHANGING  data = ls_token ).
+lo_ias->close( ).
+
+" 3. Ask document-delivery for the link.
+DATA(lv_body) = |\{"contRep":"{ ls_conn-archiv_id }","archDocId":"{ ls_conn-arc_doc_id }",|
+             && |"sapObject":"PRINTDOC","objectId":"{ lv_print_doc }",|
+             && |"docType":"{ ls_conn-ar_object }","ttlDays":30\}|.
+cl_http_client=>create_by_destination(
+  EXPORTING destination = 'DOCDELIVERY_SRV'
+  IMPORTING client      = DATA(lo_srv) ).
+lo_srv->request->set_method( 'POST' ).
+lo_srv->request->set_content_type( 'application/json' ).
+lo_srv->request->set_header_field( name  = 'Authorization'
+                                   value = |Bearer { ls_token-access_token }| ).
+lo_srv->request->set_cdata( lv_body ).
+lo_srv->send( ).
+lo_srv->receive( ).
+lo_srv->response->get_status( IMPORTING code = DATA(lv_status) ).
+
+DATA: BEGIN OF ls_link, docid TYPE string, deliveryurl TYPE string, expiresat TYPE string,
+      END OF ls_link.
+IF lv_status = 200.
+  /ui2/cl_json=>deserialize( EXPORTING json = lo_srv->response->get_cdata( )
+                             CHANGING  data = ls_link ).
+  " ls_link-deliveryurl goes into the message to the customer.
+ENDIF.
+lo_srv->close( ).
+```
+
+Notes on the sketch:
+
+- The token is valid for a while (`expires_in` in the token response). For a bill run, fetch it
+  once and reuse it for the batch, not once per bill.
+- Treat any status other than 200 as "no link" and send the message without it or retry later.
+  Don't show the response body to the customer.
+- S/4's standard OAuth client (transaction `OA2C_CONFIG`) can replace step 2. The manual request
+  is shown because it makes the optional `resource` parameter easy to add.
+- S/4 Private Cloud needs outbound HTTPS to both hosts allowed.
+
+### What each side sets up
+
+| # | Step | Done by |
+|---|---|---|
+| 1 | An IAS application for S/4 with a dependency on document-delivery (same as [step 1](#1-your-apps-ias-application)), and a client secret for it | S/4 team with the IAS admin |
+| 2 | The two SM59 destinations above; outbound access to both hosts | Basis |
+| 3 | Tell the maintainers the client ID. It is the `azp` that gets the grant. | S/4 team |
+| 4 | Add that `azp` to the repository in `ARCHIVELINK_REPOSITORIES` in `secrets.mtaext`, e.g. `{"C1":{"allowedReaders":["<s4-azp>"]}}`, and redeploy | document-delivery maintainers |
+| 5 | Nothing to do: `mta.yaml` sets `DELIVERY_BASE_URL` to the service's own route, so `deliveryUrl` comes back as a full `https://<document-delivery-srv>/doc/<token>` address | — |
+| 6 | The fetch path to the archive: the [OTAC runbook](setup/archivelink-otac.md) (`OpenText_OTAC` destination, Cloud Connector mapping, signing certificate registered read-only on `C1`) | document-delivery maintainers, Basis, OpenText admin |
+
+Use a separate IAS client and grant per S/4 system (DEV, QAS, PRD).
+
+### Can a BTP app use this too?
+
+Yes. `linkForArchive` doesn't care that the caller is S/4. A BTP app that reads the ArchiveLink
+reference from S/4 (for example a portal that lists a customer's bills through an S/4 OData
+service) follows steps 1–5 of the CAP guide, asks to be added to the repository's
+`allowedReaders` instead of a bucket, and calls `linkForArchive` through its `DOCUMENT_SERVICE`
+destination. It can also keep the returned `docId` and call `linkFor(docId)` later, like any
+other document.
+
+### Troubleshooting
+
+| Symptom | Cause and fix |
+|---|---|
+| `401` from `linkForArchive` | No token, an expired token, or a token issued for a different audience (add the `resource` parameter, see the sketch). |
+| `403 caller token carries no azp claim` | The token isn't a client-credentials token of an IAS application. |
+| `400` from `linkForArchive` | `contRep` isn't 2 characters `[A-Z0-9]`, `archDocId` isn't 1–40 characters `[A-Za-z0-9]`, or an optional field is longer than its link-table column. |
+| `404 not found` from `linkForArchive` | The caller's `azp` isn't in the repository's `allowedReaders`, the repository isn't configured, or the document was revoked. All three return the same 404 on purpose; document-delivery's log says which. |
+| `deliveryUrl` starts with `/doc/` | `DELIVERY_BASE_URL` is missing on the deployed app. It comes from `mta.yaml`; redeploy. |
+| The link returns `403 invalid token: expired` | It outlived its `ttlDays`. Request a new one. |
+| The link returns `404` | The document was revoked. |
+| The link returns `502` | document-delivery couldn't read from the archive. In its log, `401 ICS:3001` means the signing certificate isn't registered or enabled on the repository; `401 ICS:3003` means no signing certificate is configured; `404` means that `ARC_DOC_ID` doesn't exist in the repository. |
+| `500 archive registry is misconfigured` | `ARCHIVELINK_REPOSITORIES` in document-delivery is malformed. Maintainers' side. |

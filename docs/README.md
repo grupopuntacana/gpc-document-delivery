@@ -33,7 +33,8 @@ legible.
 ## Map
 
 - **[adr/](adr/)** — active decision log: [0001 sharing pattern](adr/0001-document-sharing-pattern.md),
-  [0005 CAP delivery+ingest service](adr/0005-shared-delivery-ingest-service.md). (The
+  [0005 CAP delivery+ingest service](adr/0005-shared-delivery-ingest-service.md), …,
+  [0009 S/4 ArchiveLink delivery](adr/0009-archivelink-source-typed-documents.md). (The
   retired 0002–0004 → RFC 0001; see the [ADR index](adr/README.md#the-gap-at-00020004).)
 - **[rfc/](rfc/)** — [0001 anonymous public endpoint](rfc/0001-public-anonymous-endpoint.md) *(discarded)*.
 - **[constraints.md](constraints.md)** — IS Starter licensing, OTDS auth gotcha, no-HANA-BLOBs,
@@ -45,10 +46,12 @@ legible.
   (the solution landscape by network zone).
 - **[endpoint-discovery.md](endpoint-discovery.md)** — OpenText REST endpoints probed during
   the spike, and the OTDS-federation finding.
-- **[CONSUMING.md](CONSUMING.md)** — how a CAP app that stores files with
-  `@gpc/attachments-opentext` claims them (`register`) and mints delivery links (`linkFor`):
-  IAS identity, destination, bucket request, proxy model, troubleshooting.
-- **[setup/](setup/)** — AWS provisioning runbook (S3 bucket, CloudFront key pair, distribution).
+- **[CONSUMING.md](CONSUMING.md)** — how another system gets delivery links. For a CAP app that
+  stores files with `@gpc/attachments-opentext`: `register` and `linkFor`, IAS identity,
+  destination, bucket request, proxy model. For S/4: `linkForArchive` with its ArchiveLink
+  reference, including an ABAP sketch. Troubleshooting for both.
+- **[setup/](setup/)** — AWS provisioning runbook (S3 bucket, CloudFront key pair, distribution)
+  and the [ArchiveLink / OTAC connectivity runbook](setup/archivelink-otac.md).
 - **[tasks/](tasks/)** — lightweight work tracker.
 
 For BTP setup, Credential Store, and the debugging/timing playbook, the root

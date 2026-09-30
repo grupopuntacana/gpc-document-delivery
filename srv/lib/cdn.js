@@ -117,41 +117,70 @@ async function objectExists(key) {
  */
 async function publish(nodeId) {
   const key = cloudfront.s3Key(nodeId);
+  return publishObject({
+    key,
+    label: `node=${nodeId}`,
+    metadata: { 'opentext-node-id': String(nodeId) },
+    load: async () => {
+      const [{ buffer, contentType, fileName }, originalName] = await Promise.all([
+        opentext.downloadDocument(nodeId),
+        opentext.getNodeName(nodeId),
+      ]);
+      // The OTCS node name is the authoritative filename; fall back to the download's
+      // Content-Disposition name when the name lookup couldn't read it. Recover the type from
+      // that name if the download reported a generic octet-stream (as the stream path does).
+      const displayName = originalName || fileName;
+      return {
+        buffer,
+        contentType: opentext.resolveContentType(contentType, displayName),
+        fileName: opentext.downloadFileName(nodeId, contentType, displayName),
+      };
+    },
+  });
+}
+
+/**
+ * The source-agnostic core of `publish` (ADR 0009): HeadObject → on a miss, `load()` the bytes
+ * from the system of record and PutObject them with cache-only metadata → sign. `publish(nodeId)`
+ * is the OpenText-node flavour; ArchiveLink rows call this directly with their own key + loader.
+ *
+ * @param {object} args
+ * @param {string} args.key         S3 object key
+ * @param {string} args.label       log label, e.g. `node=2000` / `archive=C1/0AFF…`
+ * @param {object} args.metadata    extra S3 user metadata identifying the source object
+ * @param {() => Promise<{buffer:Buffer, contentType:string, fileName:string}>} args.load
+ * @param {string} [args.sourceOfTruth] recorded on the object; defaults to `opentext`
+ * @returns {Promise<string>} a short-lived CloudFront signed URL
+ */
+async function publishObject({
+  key, label, metadata, load, sourceOfTruth = 'opentext',
+}) {
   if (await objectExists(key)) {
-    LOG.debug(`cache hit for node=${nodeId}`);
+    LOG.debug(`cache hit for ${label}`);
   } else {
-    LOG.info(`cache miss for node=${nodeId} — fetching from OpenText`);
+    LOG.info(`cache miss for ${label} — fetching from ${sourceOfTruth}`);
     const { PutObjectCommand } = deps.loadS3Sdk();
     const s3 = await getS3();
-    const [{ buffer, contentType, fileName }, originalName] = await Promise.all([
-      opentext.downloadDocument(nodeId),
-      opentext.getNodeName(nodeId),
-    ]);
-    // The OTCS node name is the authoritative filename; fall back to the download's
-    // Content-Disposition name when the name lookup couldn't read it. Recover the type from
-    // that name if the download reported a generic octet-stream (same logic the stream path uses).
-    const displayName = originalName || fileName;
-    const safeName = opentext.downloadFileName(nodeId, contentType, displayName);
-    const type = opentext.resolveContentType(contentType, displayName);
+    const { buffer, contentType, fileName } = await load();
     await s3.send(
       new PutObjectCommand({
         Bucket: s3Bucket(),
         Key: key,
         Body: buffer,
-        ContentType: type,
-        ContentDisposition: `inline; filename="${safeName}"`,
+        ContentType: contentType,
+        ContentDisposition: opentext.contentDisposition(contentType, fileName),
         Metadata: {
-          'opentext-node-id': String(nodeId),
+          ...metadata,
           // S3 user metadata must be US-ASCII; encode so a non-ASCII name (résumé.pdf) is safe.
-          'original-filename': encodeURIComponent(safeName),
-          'source-of-truth': 'opentext',
+          'original-filename': encodeURIComponent(fileName),
+          'source-of-truth': sourceOfTruth,
           'cache-only': 'true',
         },
       }),
     );
-    LOG.info(`cached node=${nodeId} bytes=${buffer.length} type=${type} key=${key}`);
+    LOG.info(`cached ${label} bytes=${buffer.length} type=${contentType} key=${key}`);
   }
-  return cloudfront.signedUrlForNode(nodeId);
+  return cloudfront.signedUrlForKey(key);
 }
 
 /**
@@ -174,6 +203,7 @@ async function invalidate(nodeId) {
 
 module.exports = {
   publish,
+  publishObject,
   invalidate,
   // exported for unit tests
   deps,
