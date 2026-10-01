@@ -12,13 +12,14 @@
  *
  * **Signed URLs.** A repository that enforces security (C1 does — an unsigned read answers
  * `401 ICS:3003 … parameter secKey`) needs `accessMode`/`authId`/`expiration`/`secKey` on the
- * URL (`seckey.js`). Signing switches on when a certificate is configured:
+ * URL (`seckey.js`). Signing switches on when a certificate is configured. The key pair lives in
+ * the Credential Store, one entry each, so it rotates in one place with no redeploy:
  *
- *   ARCHIVELINK_SIGNING_CERT[_PATH]  the certificate registered on the repository (public, PEM)
- *   ArchiveLinkSigningKey            its private key — Credential Store, or
- *                                    ARCHIVELINK_SIGNING_KEY[_PATH] locally
- *   ARCHIVELINK_AUTH_ID              the id it is registered under; default `CN=<cert CN>`
- *   ARCHIVELINK_SIGNING_DIGEST       sha1 (protocol default) | sha256
+ *   ArchiveLinkSigningCert      the certificate registered on the repository (public, PEM)
+ *   ArchiveLinkSigningKey       its private key
+ *   (locally: ARCHIVELINK_SIGNING_CERT[_PATH] and ARCHIVELINK_SIGNING_KEY[_PATH])
+ *   ARCHIVELINK_AUTH_ID         the id it is registered under; default `CN=<cert CN>`
+ *   ARCHIVELINK_SIGNING_DIGEST  sha1 (protocol default) | sha256
  *
  * With no certificate configured requests go out unsigned, which is what a repository without
  * security expects. Authentication the destination itself carries is applied by the SAP Cloud
@@ -27,9 +28,6 @@
  * Endpoint path and protocol constants live HERE, never in env (CLAUDE.md rule) — only the
  * destination name (base URL + credentials) is configurable.
  */
-
-const crypto = require('crypto');
-const fs = require('fs');
 
 const LOG = require('@sap/cds').log('archivelink');
 const credstore = require('./credstore');
@@ -56,15 +54,6 @@ const SIGNER_TTL_MS = Number(process.env.ARCHIVELINK_SIGNER_TTL_MS ?? 10 * 60 * 
 let _signerPromise = null;
 let _signerExpires = 0;
 
-/** The configured certificate (PEM), or null when signing is off. */
-function signingCert() {
-  if (process.env.ARCHIVELINK_SIGNING_CERT) return process.env.ARCHIVELINK_SIGNING_CERT;
-  if (process.env.ARCHIVELINK_SIGNING_CERT_PATH) {
-    return fs.readFileSync(process.env.ARCHIVELINK_SIGNING_CERT_PATH, 'utf8');
-  }
-  return null;
-}
-
 /**
  * The parsed signer (`seckey.createSigner`), or null when no certificate is configured.
  * @returns {Promise<?ReturnType<typeof seckey.createSigner>>}
@@ -74,18 +63,19 @@ function getSigner() {
   if (_signerPromise && now < _signerExpires) return _signerPromise;
   _signerExpires = now + SIGNER_TTL_MS;
   _signerPromise = (async () => {
-    const certPem = signingCert();
+    // Both halves come from the Credential Store: read them together (one round trip of wait,
+    // not two). The key's error is held back until we know a certificate exists, so "no
+    // certificate = signing off" still works without a key.
+    const [certPem, keyRead] = await Promise.all([
+      credstore.getArchiveLinkSigningCert(),
+      credstore.getArchiveLinkSigningKey().then((keyPem) => ({ keyPem }), (error) => ({ error })),
+    ]);
     if (!certPem) return null;
-    const keyPem = await credstore.getArchiveLinkSigningKey();
-    // `subject` is "CN=name" lines; the archive registers a certificate under an authId that
-    // conventionally is its subject (S/4 uses `CN=<SID>`). This default is a convenience for
-    // plain single-CN certificates: if the repository registered it under anything else, set
-    // ARCHIVELINK_AUTH_ID, which always wins.
-    const cn = /CN=([^\n,+]+)/.exec(new crypto.X509Certificate(certPem).subject);
+    if (keyRead.error) throw keyRead.error;
     return seckey.createSigner({
-      keyPem,
+      keyPem: keyRead.keyPem,
       certPem,
-      authId: process.env.ARCHIVELINK_AUTH_ID || (cn ? `CN=${cn[1].trim()}` : ''),
+      authId: process.env.ARCHIVELINK_AUTH_ID, // optional; defaults to CN=<certificate CN>
       digest: process.env.ARCHIVELINK_SIGNING_DIGEST || 'sha1',
     });
   })();
@@ -110,13 +100,14 @@ function getUrl(contRep, archDocId, compId, signer = null) {
   const q = [
     'get',
     `pVersion=${PROTOCOL_VERSION}`,
-    `contRep=${encodeURIComponent(contRep)}`,
-    `docId=${encodeURIComponent(archDocId)}`,
-    `compId=${encodeURIComponent(compId)}`,
+    `contRep=${seckey.encodeParam(contRep)}`,
+    `docId=${seckey.encodeParam(archDocId)}`,
+    `compId=${seckey.encodeParam(compId)}`,
   ];
   if (signer) {
+    // Already encoded by seckey (the same strings it signed): append as they are.
     const sig = seckey.readParams({ contRep, docId: archDocId }, signer);
-    q.push(...Object.entries(sig).map(([k, v]) => `${k}=${encodeURIComponent(v)}`));
+    q.push(...Object.entries(sig).map(([k, v]) => `${k}=${v}`));
   }
   return `${ARCHIVE_PATH}?${q.join('&')}`;
 }

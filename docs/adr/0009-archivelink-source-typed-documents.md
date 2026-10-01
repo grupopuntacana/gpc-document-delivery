@@ -127,8 +127,9 @@ Customer
 - **The repository requires signed URLs, so the service holds a signing key.** Discovery on
   `C1` (Archive Center 25.4) showed unsigned reads answer `401 ICS:3003`. `srv/lib/seckey.js`
   signs each fetch (`accessMode`/`authId`/`expiration`/`secKey`, PKCS#7 detached, RSA or DSA).
-  The private key lives in the Credential Store, and its certificate must be registered on the
-  repository, **read-only**, by the OpenText admin. That is one more secret to rotate and one
+  The key pair lives in the Credential Store (the certificate is public, but it is stored beside
+  its key so the two rotate together without a redeploy), and the certificate must be registered
+  on the repository, **read-only**, by the OpenText admin. That is one more secret to rotate and one
   more cross-team step per landscape tier ([runbook](../setup/archivelink-otac.md)).
 - **Existence is not checked at mint time.** A wrong `archDocId` from an authorized caller mints a
   link that 502s on redeem. The caller is trusted (it holds the TOA01 row), and a Content Server
